@@ -138,16 +138,14 @@ VirtualDirRead (
      OUT VOID                 *Buffer
   )
 {
+  EFI_STATUS        Status;
   VIRTUAL_FILE_DATA  *Data;
   UINTN              ReadSize;
-  EFI_STATUS        Status;
-
   UINTN              FileStrSize;
   UINTN              FileStrMaxSize;
   EFI_FILE_INFO     *DirFileEntry;
 
   Data = VIRTUAL_FILE_FROM_PROTOCOL (This);
- // DEBUG ((DEBUG_INFO, "readdir %u %u %u %llX %llX\n", Data->Attribute, Data->FilePosition, Data->FileSize, Data->OriginalProtocol, This));
 
   //
   // If our extra file position is zero, read underlying protocol first.
@@ -168,62 +166,51 @@ VirtualDirRead (
   // Restore buffer.
   *BufferSize = ReadSize;
 
-  //if (Data->OriginalProtocol == NULL) {
-    if (Data->FilePosition > Data->FileSize) {
-      //
-      // On entry, the current file position is beyond the end of the file.
-      //
-      return EFI_DEVICE_ERROR;
-    }
-
-    // End of directory reached.
-    if (Data->FilePosition == Data->FileSize) {
-      *BufferSize = 0;
-      return EFI_SUCCESS;
-    }
-
+  if (Data->FilePosition > Data->FileSize) {
     //
-    // Get next file info struct.
+    // On entry, the current file position is beyond the end of the file.
     //
-    DirFileEntry = (EFI_FILE_INFO*)(Data->FileBuffer + Data->FilePosition);
+    return EFI_DEVICE_ERROR;
+  }
 
-    // Determine entry size.
-    FileStrMaxSize = Data->FileSize - Data->FilePosition - SIZE_OF_EFI_FILE_INFO;
-    FileStrSize = StrnSizeS (DirFileEntry->FileName, FileStrMaxSize / sizeof (CHAR16));
-    if (FileStrSize > FileStrMaxSize) {
-      FreePool (DirFileEntry);
-      return EFI_DEVICE_ERROR; 
-    }
-    ReadSize = SIZE_OF_EFI_FILE_INFO + FileStrSize;
-
-    // Ensure sizes match.
-    DEBUG ((DEBUG_INFO, "READY with %s %u %u\n", DirFileEntry->FileName, ReadSize, DirFileEntry->Size));
-    ASSERT (ReadSize == DirFileEntry->Size);
-
-   // DEBUG ((DEBUG_INFO, "READY with %s\n", DirFileEntry->FileName));
-    //while (1);
-
-    //
-    // Ensure buffer is large enough.
-    //
-    if (*BufferSize < ReadSize) {
-      *BufferSize = ReadSize;
-      DEBUG ((DEBUG_INFO, "buffer too small with %s\n", DirFileEntry->FileName));
-      return EFI_BUFFER_TOO_SMALL;
-    }
-
-DEBUG ((DEBUG_INFO, "doing a read with %s\n", DirFileEntry->FileName));
-    CopyMem (Buffer, DirFileEntry, ReadSize);
-    *BufferSize = ReadSize;
-    Data->FilePosition += ALIGN_VALUE (ReadSize, OC_ALIGNOF (EFI_FILE_INFO));
+  //
+  // End of directory reached.
+  //
+  if (Data->FilePosition == Data->FileSize) {
+    *BufferSize = 0;
     return EFI_SUCCESS;
- // }
+  }
 
   //
-  // TODO: we may want to provide ReadCallback for directory info update.
+  // Get next file info struct.
   //
+  DirFileEntry = (EFI_FILE_INFO*)(Data->FileBuffer + Data->FilePosition);
 
-  //return 
+  //
+  // Determine entry size.
+  //
+  FileStrMaxSize = Data->FileSize - Data->FilePosition - SIZE_OF_EFI_FILE_INFO;
+  FileStrSize = StrnSizeS (DirFileEntry->FileName, FileStrMaxSize / sizeof (CHAR16));
+  if (FileStrSize > FileStrMaxSize) {
+    FreePool (DirFileEntry);
+    return EFI_DEVICE_ERROR; 
+  }
+  ReadSize = SIZE_OF_EFI_FILE_INFO + FileStrSize;
+  ASSERT (ReadSize == DirFileEntry->Size);
+
+  //
+  // Ensure buffer is large enough.
+  //
+  if (*BufferSize < ReadSize) {
+    *BufferSize = ReadSize;
+    DEBUG ((DEBUG_INFO, "buffer too small with %s\n", DirFileEntry->FileName));
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
+  CopyMem (Buffer, DirFileEntry, ReadSize);
+  *BufferSize = ReadSize;
+  Data->FilePosition += ALIGN_VALUE (ReadSize, OC_ALIGNOF (EFI_FILE_INFO));
+  return EFI_SUCCESS;
 }
 
 STATIC
@@ -305,11 +292,9 @@ VirtualDirGetInfo (
   UINTN              NameSize;
   EFI_FILE_INFO      *FileInfo;
   BOOLEAN            Fits;
-
-  UINTN BaseFileSize;
+  UINTN              BaseFileSize;
 
   Data = VIRTUAL_FILE_FROM_PROTOCOL (This);
- // DEBUG ((DEBUG_INFO, "get dir info %u %u %u %llX %llX\n", Data->Attribute, Data->FilePosition, Data->FileSize, Data->OriginalProtocol, This));
 
   //
   // Get underlying protocol info.
@@ -344,60 +329,44 @@ VirtualDirGetInfo (
     FreePool (FileInfo);
   }
 
+  if (CompareGuid (InformationType, &gEfiFileInfoGuid)) {
+    OC_STATIC_ASSERT (
+      sizeof (FileInfo->FileName) == sizeof (CHAR16),
+      "Header changed, flexible array member is now supported"
+      );
 
+    FileInfo    = (EFI_FILE_INFO *) Buffer;
+    NameSize    = StrSize (Data->FileName);
+    InfoSize    = sizeof (EFI_FILE_INFO) - sizeof (CHAR16) + NameSize;
+    Fits        = *BufferSize >= InfoSize;
+    *BufferSize = InfoSize;
 
- // if (Data->OriginalProtocol == NULL) {
-    if (CompareGuid (InformationType, &gEfiFileInfoGuid)) {
-      OC_STATIC_ASSERT (
-        sizeof (FileInfo->FileName) == sizeof (CHAR16),
-        "Header changed, flexible array member is now supported"
-        );
-
-      FileInfo    = (EFI_FILE_INFO *) Buffer;
-      NameSize    = StrSize (Data->FileName);
-      InfoSize    = sizeof (EFI_FILE_INFO) - sizeof (CHAR16) + NameSize;
-      Fits        = *BufferSize >= InfoSize;
-      *BufferSize = InfoSize;
-
-      if (!Fits) {
-        return EFI_BUFFER_TOO_SMALL;
-      }
-
-      ZeroMem (FileInfo, InfoSize - NameSize);
-      FileInfo->Size         = InfoSize;
-      FileInfo->FileSize     = Data->FileSize + BaseFileSize;
-      FileInfo->PhysicalSize = Data->FileSize + BaseFileSize;
-
-      CopyMem (&FileInfo->CreateTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
-      CopyMem (&FileInfo->LastAccessTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
-      CopyMem (&FileInfo->ModificationTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
-
-      //
-      // Return zeroes for timestamps.
-      //
-      FileInfo->Attribute    = EFI_FILE_READ_ONLY | EFI_FILE_DIRECTORY;
-      CopyMem (&FileInfo->FileName[0], Data->FileName, NameSize);
-
-      return EFI_SUCCESS;
+    if (!Fits) {
+      return EFI_BUFFER_TOO_SMALL;
     }
 
+    ZeroMem (FileInfo, InfoSize - NameSize);
+    FileInfo->Size         = InfoSize;
+    FileInfo->FileSize     = Data->FileSize + BaseFileSize;
+    FileInfo->PhysicalSize = Data->FileSize + BaseFileSize;
+
+    CopyMem (&FileInfo->CreateTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
+    CopyMem (&FileInfo->LastAccessTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
+    CopyMem (&FileInfo->ModificationTime, &Data->ModificationTime, sizeof (FileInfo->ModificationTime));
+
     //
-    // TODO: return some dummy data for EFI_FILE_SYSTEM_INFO?
+    // Return zeroes for timestamps.
     //
+    FileInfo->Attribute    = EFI_FILE_READ_ONLY | EFI_FILE_DIRECTORY;
+    CopyMem (&FileInfo->FileName[0], Data->FileName, NameSize);
 
-    return EFI_UNSUPPORTED;
- // }
-
-  
-
-  DEBUG ((DEBUG_INFO, "Getting file info %g with now BufferSize %u mode gave - %r\n",
-    InformationType, (UINT32) *BufferSize, Status));
-
-  if (!EFI_ERROR (Status) && CompareGuid (InformationType, &gEfiFileInfoGuid)) {
-    DEBUG ((DEBUG_VERBOSE, "Got file size %u\n", (UINT32) ((EFI_FILE_INFO *) Buffer)->FileSize));
+    return EFI_SUCCESS;
   }
 
-  return EFI_SUCCESS;
+  //
+  // TODO: return some dummy data for EFI_FILE_SYSTEM_INFO?
+  //
+  return EFI_UNSUPPORTED;
 }
 
 STATIC
@@ -619,6 +588,5 @@ CreateVirtualDir (
   }
 
   *File = &Data->Protocol;
-//DEBUG ((DEBUG_INFO, "makedir %u %u %u\n", Data->Attribute, Data->FilePosition, Data->FileSize));
   return EFI_SUCCESS;
 }
