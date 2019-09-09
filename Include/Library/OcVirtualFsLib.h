@@ -45,6 +45,17 @@ CreateVirtualFile (
   IN OUT EFI_FILE_PROTOCOL  **File
   );
 
+
+EFI_STATUS
+CreateVirtualDir (
+  IN     CHAR16             *FileName,
+  IN     VOID               *FileBuffer,
+  IN     UINT64             FileSize,
+  IN     EFI_TIME           *ModificationTime OPTIONAL,
+  IN     EFI_FILE_PROTOCOL  *UnderlyingFile OPTIONAL,
+  IN OUT EFI_FILE_PROTOCOL  **File
+  );
+
 /**
   Creates virtual file system instance around any file.
   CreateRealFile or CreateVirtualFile must be called from
