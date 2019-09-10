@@ -185,10 +185,14 @@ VirtualDirRead (
   // Get next file info struct.
   //
   DirFileEntry = (EFI_FILE_INFO*)(Data->FileBuffer + Data->FilePosition);
+  ASSERT (Data->FilePosition % OC_ALIGNOF (EFI_FILE_INFO) == 0);
 
   //
   // Determine entry size.
   //
+  if (Data->FileSize - Data->FilePosition < SIZE_OF_EFI_FILE_INFO) {
+    return EFI_DEVICE_ERROR;
+  }
   FileStrMaxSize = Data->FileSize - Data->FilePosition - SIZE_OF_EFI_FILE_INFO;
   FileStrSize = StrnSizeS (DirFileEntry->FileName, FileStrMaxSize / sizeof (CHAR16));
   if (FileStrSize > FileStrMaxSize) {
@@ -203,7 +207,6 @@ VirtualDirRead (
   //
   if (*BufferSize < ReadSize) {
     *BufferSize = ReadSize;
-    DEBUG ((DEBUG_INFO, "buffer too small with %s\n", DirFileEntry->FileName));
     return EFI_BUFFER_TOO_SMALL;
   }
 
@@ -314,6 +317,11 @@ VirtualDirGetInfo (
     }
 
     FileInfo = AllocatePool (InfoSize);
+    if (FileInfo == NULL) {
+      DEBUG ((DEBUG_VERBOSE, "Failed to allocate file info buffer for underlying protocol\n"));
+      return EFI_DEVICE_ERROR;
+    }
+
     Status = Data->OriginalProtocol->GetInfo (
       Data->OriginalProtocol,
       InformationType,
