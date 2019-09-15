@@ -45,9 +45,27 @@ CreateVirtualFile (
   IN OUT EFI_FILE_PROTOCOL  **File
   );
 
+EFI_STATUS
+CreateVirtualFileFileNameCopy (
+  IN     CHAR16             *FileName,
+  IN     VOID               *FileBuffer,
+  IN     UINT64             FileSize,
+  IN     EFI_TIME           *ModificationTime OPTIONAL,
+  IN OUT EFI_FILE_PROTOCOL  **File
+  );
 
 EFI_STATUS
 CreateVirtualDir (
+  IN     CHAR16             *FileName,
+  IN     VOID               *FileBuffer,
+  IN     UINT64             FileSize,
+  IN     EFI_TIME           *ModificationTime OPTIONAL,
+  IN     EFI_FILE_PROTOCOL  *UnderlyingFile OPTIONAL,
+  IN OUT EFI_FILE_PROTOCOL  **File
+  );
+
+EFI_STATUS
+CreateVirtualDirFileNameCopy (
   IN     CHAR16             *FileName,
   IN     VOID               *FileBuffer,
   IN     UINT64             FileSize,

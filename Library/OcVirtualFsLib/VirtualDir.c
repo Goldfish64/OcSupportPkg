@@ -598,3 +598,31 @@ CreateVirtualDir (
   *File = &Data->Protocol;
   return EFI_SUCCESS;
 }
+
+EFI_STATUS
+CreateVirtualDirFileNameCopy (
+  IN     CHAR16             *FileName,
+  IN     VOID               *FileBuffer,
+  IN     UINT64             FileSize,
+  IN     EFI_TIME           *ModificationTime OPTIONAL,
+  IN     EFI_FILE_PROTOCOL  *UnderlyingFile OPTIONAL,
+  IN OUT EFI_FILE_PROTOCOL  **File
+  )
+{
+  EFI_STATUS          Status;
+  CHAR16              *FileNameCopy;
+
+  FileNameCopy = AllocateCopyPool (StrSize (FileName), FileName);
+  if (FileNameCopy == NULL) {
+    DEBUG ((DEBUG_WARN, "Failed to allocate directory name (%a) copy\n", FileName));
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  Status = CreateVirtualDir (FileNameCopy, FileBuffer, FileSize, ModificationTime, UnderlyingFile, File);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "Failed to virtualise directory (%a)\n", FileName));
+    FreePool (FileNameCopy);
+    return EFI_OUT_OF_RESOURCES;
+  }
+  return Status;
+}
