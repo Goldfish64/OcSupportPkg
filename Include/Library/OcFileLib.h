@@ -271,4 +271,11 @@ OcGetGptPartitionEntry (
   IN EFI_HANDLE  FsHandle
   );
 
+EFI_STATUS
+AllocateCopyFileData (
+  IN  EFI_FILE_PROTOCOL  *File,
+  OUT UINT8              **Buffer,
+  OUT UINT32             *BufferSize
+  );
+
 #endif // OC_FILE_LIB_H
