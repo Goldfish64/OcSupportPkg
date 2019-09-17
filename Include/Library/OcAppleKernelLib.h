@@ -402,13 +402,13 @@ PatcherBlockKext (
 /**
   Apply MSR E2 patches to AppleIntelCPUPowerManagement kext.
 
-  @param Context  Prelinked kernel context.
+  @param Patcher  Patcher context.
 
   @return  RETURN_SUCCESS on success.
 **/
 RETURN_STATUS
 PatchAppleCpuPmCfgLock (
-  IN OUT PRELINKED_CONTEXT  *Context
+  IN OUT PATCHER_CONTEXT *Patcher
   );
 
 /**

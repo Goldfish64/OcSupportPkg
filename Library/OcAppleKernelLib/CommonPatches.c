@@ -98,35 +98,24 @@ mAppleIntelCPUPowerManagementPatch2 = {
 
 RETURN_STATUS
 PatchAppleCpuPmCfgLock (
-  IN OUT PRELINKED_CONTEXT  *Context
+  IN OUT PATCHER_CONTEXT *Patcher
   )
 {
   RETURN_STATUS       Status;
   RETURN_STATUS       Status2;
-  PATCHER_CONTEXT     Patcher;
 
-  Status = PatcherInitContextFromPrelinked (
-    &Patcher,
-    Context,
-    "com.apple.driver.AppleIntelCPUPowerManagement"
-    );
-
+  Status = PatcherApplyGenericPatch (Patcher, &mAppleIntelCPUPowerManagementPatch);
   if (!RETURN_ERROR (Status)) {
-    Status = PatcherApplyGenericPatch (&Patcher, &mAppleIntelCPUPowerManagementPatch);
-    if (!RETURN_ERROR (Status)) {
-      DEBUG ((DEBUG_INFO, "OCAK: Patch v1 success com.apple.driver.AppleIntelCPUPowerManagement\n"));
-    }
+    DEBUG ((DEBUG_INFO, "OCAK: Patch v1 success com.apple.driver.AppleIntelCPUPowerManagement\n"));
+  }
 
-    Status2 = PatcherApplyGenericPatch (&Patcher, &mAppleIntelCPUPowerManagementPatch2);
-    if (!RETURN_ERROR (Status2)) {
-      DEBUG ((DEBUG_INFO, "OCAK: Patch v2 success com.apple.driver.AppleIntelCPUPowerManagement\n"));
-    }
+  Status2 = PatcherApplyGenericPatch (Patcher, &mAppleIntelCPUPowerManagementPatch2);
+  if (!RETURN_ERROR (Status2)) {
+    DEBUG ((DEBUG_INFO, "OCAK: Patch v2 success com.apple.driver.AppleIntelCPUPowerManagement\n"));
+  }
 
-    if (RETURN_ERROR (Status) && RETURN_ERROR (Status2)) {
-      DEBUG ((DEBUG_INFO, "OCAK: Failed to apply patches com.apple.driver.AppleIntelCPUPowerManagement - %r/%r\n", Status, Status2));
-    }
-  } else {
-    DEBUG ((DEBUG_INFO, "OCAK: Failed to find com.apple.driver.AppleIntelCPUPowerManagement - %r\n", Status));
+  if (RETURN_ERROR (Status) && RETURN_ERROR (Status2)) {
+    DEBUG ((DEBUG_INFO, "OCAK: Failed to apply patches com.apple.driver.AppleIntelCPUPowerManagement - %r/%r\n", Status, Status2));
   }
 
   //
