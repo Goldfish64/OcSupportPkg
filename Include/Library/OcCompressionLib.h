@@ -117,4 +117,10 @@ DecompressZLIB (
   IN  UINTN        SrcLen
   );
 
+UINT32
+Adler32 (
+  IN CONST UINT8  *Buffer,
+  IN UINT32       BufferLen
+);
+
 #endif // OC_COMPRESSION_LIB_H
