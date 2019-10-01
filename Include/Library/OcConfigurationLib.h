@@ -155,7 +155,8 @@
 #define OC_KERNEL_ADD_ENTRY_FIELDS(_, __) \
   _(BOOLEAN                     , Enabled          ,     , FALSE                       , ()                   ) \
   _(OC_STRING                   , Comment          ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
-  _(OC_STRING                   , MatchKernel      ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
+  _(OC_STRING                   , MaxKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
+  _(OC_STRING                   , MinKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_STRING                   , BundlePath       ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_STRING                   , ExecutablePath   ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_STRING                   , PlistPath        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
@@ -176,7 +177,8 @@
   _(BOOLEAN                     , Enabled          ,     , FALSE                       , ()                   ) \
   _(OC_STRING                   , Comment          ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_STRING                   , Identifier       ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
-  _(OC_STRING                   , MatchKernel      ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) )
+  _(OC_STRING                   , MaxKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
+  _(OC_STRING                   , MinKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) )
   OC_DECLARE (OC_KERNEL_BLOCK_ENTRY)
 
 #define OC_KERNEL_BLOCK_ARRAY_FIELDS(_, __) \
@@ -202,7 +204,8 @@
   _(OC_DATA                     , Find             ,     , OC_EDATA_CONSTR (_, __)     , OC_DESTR (OC_DATA)   ) \
   _(OC_STRING                   , Identifier       ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_DATA                     , Mask             ,     , OC_EDATA_CONSTR (_, __)     , OC_DESTR (OC_DATA)   ) \
-  _(OC_STRING                   , MatchKernel      ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
+  _(OC_STRING                   , MaxKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
+  _(OC_STRING                   , MinKernel        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_DATA                     , Replace          ,     , OC_EDATA_CONSTR (_, __)     , OC_DESTR (OC_DATA)   ) \
   _(OC_DATA                     , ReplaceMask      ,     , OC_EDATA_CONSTR (_, __)     , OC_DESTR (OC_DATA)   ) \
   _(UINT32                      , Limit            ,     , 0                           , ()                   ) \
@@ -269,15 +272,19 @@
 #define OCS_EXPOSE_VERSION   2U
 
 #define OC_MISC_SECURITY_FIELDS(_, __) \
-  _(UINT32                      , ScanPolicy                  ,     , OC_SCAN_DEFAULT_POLICY , ()) \
-  _(BOOLEAN                     , AllowNvramReset             ,     , FALSE                  , ()) \
-  _(BOOLEAN                     , ExposeSensitiveData         ,     , OCS_EXPOSE_VERSION     , ()) \
-  _(BOOLEAN                     , RequireVault                ,     , TRUE                   , ()) \
-  _(BOOLEAN                     , RequireSignature            ,     , TRUE                   , ()) \
-  _(UINT64                      , HaltLevel                   ,     , 0x80000000             , ())
+  _(UINT32                      , ScanPolicy                  ,      , OC_SCAN_DEFAULT_POLICY  , ()) \
+  _(BOOLEAN                     , AllowNvramReset             ,      , FALSE                   , ()) \
+  _(BOOLEAN                     , ExposeSensitiveData         ,      , OCS_EXPOSE_VERSION      , ()) \
+  _(BOOLEAN                     , EnablePassword              ,      , FALSE                   , ()) \
+  _(UINT8                       , PasswordHash                , [64] , {0}                     , ()) \
+  _(OC_DATA                     , PasswordSalt                ,      , OC_EDATA_CONSTR (_, __) , OC_DESTR (OC_DATA)) \
+  _(BOOLEAN                     , RequireVault                ,      , TRUE                    , ()) \
+  _(BOOLEAN                     , RequireSignature            ,      , TRUE                    , ()) \
+  _(UINT64                      , HaltLevel                   ,      , 0x80000000              , ())
   OC_DECLARE (OC_MISC_SECURITY)
 
 #define OC_MISC_TOOLS_ENTRY_FIELDS(_, __) \
+  _(OC_STRING                   , Arguments        ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(OC_STRING                   , Comment          ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
   _(BOOLEAN                     , Enabled          ,     , FALSE                       , ()                   ) \
   _(OC_STRING                   , Name             ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) ) \
@@ -425,6 +432,20 @@
   OC_DECLARE (OC_UEFI_DRIVER_ARRAY)
 
 ///
+/// Input is a set of options to support advanced input.
+///
+#define OC_UEFI_INPUT_FIELDS(_, __) \
+  _(UINT8                       , KeyForgetThreshold ,     , 0                             , ()) \
+  _(UINT8                       , KeyMergeThreshold  ,     , 0                             , ()) \
+  _(BOOLEAN                     , KeySupport         ,     , FALSE                         , ()) \
+  _(OC_STRING                   , KeySupportMode     ,     , OC_STRING_CONSTR ("", _, __)  , OC_DESTR (OC_STRING)) \
+  _(BOOLEAN                     , KeySwap            ,     , FALSE                         , ()) \
+  _(BOOLEAN                     , PointerSupport     ,     , FALSE                         , ()) \
+  _(OC_STRING                   , PointerSupportMode ,     , OC_STRING_CONSTR ("", _, __)  , OC_DESTR (OC_STRING)) \
+  _(UINT32                      , TimerResolution    ,     , 0                             , ())
+OC_DECLARE (OC_UEFI_INPUT)
+
+///
 /// Prefer own protocol implementation for these protocols.
 ///
 #define OC_UEFI_PROTOCOLS_FIELDS(_, __) \
@@ -463,6 +484,7 @@
 #define OC_UEFI_CONFIG_FIELDS(_, __) \
   _(BOOLEAN                     , ConnectDrivers   ,     , FALSE                                    , ()) \
   _(OC_UEFI_DRIVER_ARRAY        , Drivers          ,     , OC_CONSTR2 (OC_UEFI_DRIVER_ARRAY, _, __) , OC_DESTR (OC_UEFI_DRIVER_ARRAY)) \
+  _(OC_UEFI_INPUT               , Input            ,     , OC_CONSTR2 (OC_UEFI_INPUT, _, __)        , OC_DESTR (OC_UEFI_INPUT)) \
   _(OC_UEFI_PROTOCOLS           , Protocols        ,     , OC_CONSTR2 (OC_UEFI_PROTOCOLS, _, __)    , OC_DESTR (OC_UEFI_PROTOCOLS)) \
   _(OC_UEFI_QUIRKS              , Quirks           ,     , OC_CONSTR2 (OC_UEFI_QUIRKS, _, __)       , OC_DESTR (OC_UEFI_QUIRKS))
   OC_DECLARE (OC_UEFI_CONFIG)

@@ -63,6 +63,7 @@ OC_STRUCTORS       (OC_PLATFORM_SMBIOS_CONFIG, ())
 OC_STRUCTORS       (OC_PLATFORM_CONFIG, ())
 
 OC_ARRAY_STRUCTORS (OC_UEFI_DRIVER_ARRAY)
+OC_STRUCTORS       (OC_UEFI_INPUT, ())
 OC_STRUCTORS       (OC_UEFI_PROTOCOLS, ())
 OC_STRUCTORS       (OC_UEFI_QUIRKS, ())
 OC_STRUCTORS       (OC_UEFI_CONFIG, ())
@@ -207,7 +208,8 @@ mKernelAddSchemaEntry[] = {
   OC_SCHEMA_STRING_IN    ("Comment",        OC_KERNEL_ADD_ENTRY, Comment),
   OC_SCHEMA_BOOLEAN_IN   ("Enabled",        OC_KERNEL_ADD_ENTRY, Enabled),
   OC_SCHEMA_STRING_IN    ("ExecutablePath", OC_KERNEL_ADD_ENTRY, ExecutablePath),
-  OC_SCHEMA_STRING_IN    ("MatchKernel",    OC_KERNEL_ADD_ENTRY, MatchKernel),
+  OC_SCHEMA_STRING_IN    ("MaxKernel",      OC_KERNEL_ADD_ENTRY, MaxKernel),
+  OC_SCHEMA_STRING_IN    ("MinKernel",      OC_KERNEL_ADD_ENTRY, MinKernel),
   OC_SCHEMA_STRING_IN    ("PlistPath",      OC_KERNEL_ADD_ENTRY, PlistPath),
 };
 
@@ -221,7 +223,8 @@ mKernelBlockSchemaEntry[] = {
   OC_SCHEMA_STRING_IN    ("Comment",        OC_KERNEL_BLOCK_ENTRY, Comment),
   OC_SCHEMA_BOOLEAN_IN   ("Enabled",        OC_KERNEL_BLOCK_ENTRY, Enabled),
   OC_SCHEMA_STRING_IN    ("Identifier",     OC_KERNEL_BLOCK_ENTRY, Identifier),
-  OC_SCHEMA_STRING_IN    ("MatchKernel",    OC_KERNEL_BLOCK_ENTRY, MatchKernel),
+  OC_SCHEMA_STRING_IN    ("MaxKernel",      OC_KERNEL_BLOCK_ENTRY, MaxKernel),
+  OC_SCHEMA_STRING_IN    ("MinKernel",      OC_KERNEL_BLOCK_ENTRY, MinKernel),
 };
 
 STATIC
@@ -246,7 +249,8 @@ mKernelPatchSchemaEntry[] = {
   OC_SCHEMA_STRING_IN    ("Identifier",     OC_KERNEL_PATCH_ENTRY, Identifier),
   OC_SCHEMA_INTEGER_IN   ("Limit",          OC_KERNEL_PATCH_ENTRY, Limit),
   OC_SCHEMA_DATA_IN      ("Mask",           OC_KERNEL_PATCH_ENTRY, Mask),
-  OC_SCHEMA_STRING_IN    ("MatchKernel",    OC_KERNEL_PATCH_ENTRY, MatchKernel),
+  OC_SCHEMA_STRING_IN    ("MaxKernel",      OC_KERNEL_PATCH_ENTRY, MaxKernel),
+  OC_SCHEMA_STRING_IN    ("MinKernel",      OC_KERNEL_PATCH_ENTRY, MinKernel),
   OC_SCHEMA_DATA_IN      ("Replace",        OC_KERNEL_PATCH_ENTRY, Replace),
   OC_SCHEMA_DATA_IN      ("ReplaceMask",    OC_KERNEL_PATCH_ENTRY, ReplaceMask),
   OC_SCHEMA_INTEGER_IN   ("Skip",           OC_KERNEL_PATCH_ENTRY, Skip)
@@ -317,8 +321,11 @@ STATIC
 OC_SCHEMA
 mMiscConfigurationSecuritySchema[] = {
   OC_SCHEMA_BOOLEAN_IN ("AllowNvramReset",      OC_GLOBAL_CONFIG, Misc.Security.AllowNvramReset),
+  OC_SCHEMA_BOOLEAN_IN ("EnablePassword",       OC_GLOBAL_CONFIG, Misc.Security.EnablePassword),
   OC_SCHEMA_INTEGER_IN ("ExposeSensitiveData",  OC_GLOBAL_CONFIG, Misc.Security.ExposeSensitiveData),
   OC_SCHEMA_INTEGER_IN ("HaltLevel",            OC_GLOBAL_CONFIG, Misc.Security.HaltLevel),
+  OC_SCHEMA_DATAF_IN   ("PasswordHash",         OC_GLOBAL_CONFIG, Misc.Security.PasswordHash),
+  OC_SCHEMA_DATA_IN    ("PasswordSalt",         OC_GLOBAL_CONFIG, Misc.Security.PasswordSalt),
   OC_SCHEMA_BOOLEAN_IN ("RequireSignature",     OC_GLOBAL_CONFIG, Misc.Security.RequireSignature),
   OC_SCHEMA_BOOLEAN_IN ("RequireVault",         OC_GLOBAL_CONFIG, Misc.Security.RequireVault),
   OC_SCHEMA_INTEGER_IN ("ScanPolicy",           OC_GLOBAL_CONFIG, Misc.Security.ScanPolicy),
@@ -327,10 +334,11 @@ mMiscConfigurationSecuritySchema[] = {
 STATIC
 OC_SCHEMA
 mMiscToolsSchemaEntry[] = {
-  OC_SCHEMA_STRING_IN  ("Comment",  OC_MISC_TOOLS_ENTRY, Comment),
-  OC_SCHEMA_BOOLEAN_IN ("Enabled",  OC_MISC_TOOLS_ENTRY, Enabled),
-  OC_SCHEMA_STRING_IN  ("Name",     OC_MISC_TOOLS_ENTRY, Name),
-  OC_SCHEMA_STRING_IN  ("Path",     OC_MISC_TOOLS_ENTRY, Path),
+  OC_SCHEMA_STRING_IN  ("Arguments", OC_MISC_TOOLS_ENTRY, Arguments),
+  OC_SCHEMA_STRING_IN  ("Comment",   OC_MISC_TOOLS_ENTRY, Comment),
+  OC_SCHEMA_BOOLEAN_IN ("Enabled",   OC_MISC_TOOLS_ENTRY, Enabled),
+  OC_SCHEMA_STRING_IN  ("Name",      OC_MISC_TOOLS_ENTRY, Name),
+  OC_SCHEMA_STRING_IN  ("Path",      OC_MISC_TOOLS_ENTRY, Path),
 };
 
 STATIC
@@ -516,9 +524,23 @@ mUefiProtocolsSchema[] = {
 
 STATIC
 OC_SCHEMA
+mUefiInputSchema[] = {
+  OC_SCHEMA_INTEGER_IN ("KeyForgetThreshold", OC_GLOBAL_CONFIG, Uefi.Input.KeyForgetThreshold),
+  OC_SCHEMA_INTEGER_IN ("KeyMergeThreshold",  OC_GLOBAL_CONFIG, Uefi.Input.KeyMergeThreshold),
+  OC_SCHEMA_BOOLEAN_IN ("KeySupport",         OC_GLOBAL_CONFIG, Uefi.Input.KeySupport),
+  OC_SCHEMA_STRING_IN  ("KeySupportMode",     OC_GLOBAL_CONFIG, Uefi.Input.KeySupportMode),
+  OC_SCHEMA_BOOLEAN_IN ("KeySwap",            OC_GLOBAL_CONFIG, Uefi.Input.KeySwap),
+  OC_SCHEMA_BOOLEAN_IN ("PointerSupport",     OC_GLOBAL_CONFIG, Uefi.Input.PointerSupport),
+  OC_SCHEMA_STRING_IN  ("PointerSupportMode", OC_GLOBAL_CONFIG, Uefi.Input.PointerSupportMode),
+  OC_SCHEMA_INTEGER_IN ("TimerResolution",    OC_GLOBAL_CONFIG, Uefi.Input.TimerResolution)
+};
+
+STATIC
+OC_SCHEMA
 mUefiConfigurationSchema[] = {
   OC_SCHEMA_BOOLEAN_IN ("ConnectDrivers", OC_GLOBAL_CONFIG, Uefi.ConnectDrivers),
   OC_SCHEMA_ARRAY_IN   ("Drivers",        OC_GLOBAL_CONFIG, Uefi.Drivers, &mUefiDriversSchema),
+  OC_SCHEMA_DICT       ("Input",          mUefiInputSchema),
   OC_SCHEMA_DICT       ("Protocols",      mUefiProtocolsSchema),
   OC_SCHEMA_DICT       ("Quirks",         mUefiQuirksSchema)
 };
