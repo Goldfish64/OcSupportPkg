@@ -16,6 +16,7 @@
 
 #include <IndustryStandard/AppleCompressedBinaryImage.h>
 #include <IndustryStandard/AppleFatBinaryImage.h>
+#include <IndustryStandard/AppleMkext.h>
 
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
@@ -315,6 +316,92 @@ ReadAppleKernelImage (
   }
 }
 
+STATIC
+RETURN_STATUS
+ReadAppleMkextImage (
+  IN     EFI_FILE_PROTOCOL  *File,
+  IN OUT UINT8              **Buffer,
+     OUT UINT32             *MkextSize,
+     OUT UINT32             *AllocatedSize,
+  IN     UINT32             ReservedSize,
+  IN     UINT32             Offset
+  )
+{
+  RETURN_STATUS        Status;
+  UINT32            *MagicPtr;
+  BOOLEAN           ForbidFat;
+
+  Status = GetFileData (File, Offset, KERNEL_HEADER_SIZE, *Buffer);
+  if (RETURN_ERROR (Status)) {
+    return Status;
+  }
+
+  //
+  // Do not allow FAT architectures with Offset > 0 (recursion).
+  //
+  ForbidFat  = Offset > 0;
+
+  while (TRUE) {
+    if (!OC_TYPE_ALIGNED (UINT32 , *Buffer)) {
+      DEBUG ((DEBUG_INFO, "Misaligned mkext header %p at %08X\n", *Buffer, Offset));
+      return RETURN_INVALID_PARAMETER;
+    }
+    MagicPtr = (UINT32 *)* Buffer;
+
+    switch (*MagicPtr) {
+      case MKEXT_MAGIC:
+      case MKEXT_INVERT_MAGIC:
+        DEBUG ((DEBUG_VERBOSE, "Found mkext offset %u size %u\n", Offset, *MkextSize));
+
+        //
+        // This is a non-fat image, just fully read it.
+        //
+        if (Offset == 0) {
+          //
+          // Figure out size for a non fat image.
+          //
+          Status = GetFileSize (File, MkextSize);
+          if (RETURN_ERROR (Status)) {
+            DEBUG ((DEBUG_INFO, "mkext size cannot be determined - %r\n", Status));
+            return RETURN_OUT_OF_RESOURCES;
+          }
+
+          DEBUG ((DEBUG_VERBOSE, "Determined mkext size is %u bytes\n", *MkextSize));
+        }
+
+        Status = ReplaceBuffer (*MkextSize, Buffer, AllocatedSize, ReservedSize);
+        if (RETURN_ERROR (Status)) {
+          DEBUG ((DEBUG_INFO, "Mkext (%u bytes) cannot be allocated at %08X\n", *MkextSize, Offset));
+          return Status;
+        }
+
+        Status = GetFileData (File, Offset, *MkextSize, *Buffer);
+        if (RETURN_ERROR (Status)) {
+          DEBUG ((DEBUG_INFO, "Mkext (%u bytes) cannot be read at %08X\n", *MkextSize, Offset));
+        }
+
+        return Status;
+      case MACH_FAT_BINARY_SIGNATURE:
+      case MACH_FAT_BINARY_INVERT_SIGNATURE:
+      {
+        if (ForbidFat) {
+          DEBUG ((DEBUG_INFO, "Fat mkext recursion %p at %08X\n", MagicPtr, Offset));
+          return RETURN_INVALID_PARAMETER;
+        }
+
+        *MkextSize = ParseFatArchitecture (Buffer, &Offset);
+        if (*MkextSize != 0) {
+          return ReadAppleMkextImage (File, Buffer, MkextSize, AllocatedSize, ReservedSize, Offset);
+        }
+        return RETURN_INVALID_PARAMETER;
+      }
+      default:
+        DEBUG ((Offset > 0 ? DEBUG_INFO : DEBUG_VERBOSE, "Invalid mkext magic %08X at %08X\n", *MagicPtr, Offset));
+        return RETURN_INVALID_PARAMETER;
+    }
+  }
+}
+
 RETURN_STATUS
 ReadAppleKernel (
   IN     EFI_FILE_PROTOCOL  *File,
@@ -345,6 +432,41 @@ ReadAppleKernel (
 
   if (RETURN_ERROR (Status)) {
     FreePool (*Kernel);
+  }
+
+  return Status;
+}
+
+RETURN_STATUS
+ReadAppleMkext (
+  IN     EFI_FILE_PROTOCOL  *File,
+  IN OUT UINT8              **Mkext,
+     OUT UINT32             *MkextSize,
+     OUT UINT32             *AllocatedSize,
+  IN     UINT32             ReservedSize
+  )
+{
+  RETURN_STATUS  Status;
+
+  *MkextSize     = 0;
+  *AllocatedSize = KERNEL_HEADER_SIZE;
+  *Mkext         = AllocatePool (*AllocatedSize);
+
+  if (*Mkext == NULL) {
+    return RETURN_INVALID_PARAMETER;
+  }
+
+  Status = ReadAppleMkextImage (
+    File,
+    Mkext,
+    MkextSize,
+    AllocatedSize,
+    ReservedSize,
+    0
+    );
+
+  if (RETURN_ERROR (Status)) {
+    FreePool (*Mkext);
   }
 
   return Status;

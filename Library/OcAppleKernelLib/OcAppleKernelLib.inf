@@ -37,6 +37,7 @@
   PrelinkedInternal.h
   PrelinkedKext.c
   Vtables.c
+  MkextContext.c
 
 [Packages]
   EfiPkg/EfiPkg.dec

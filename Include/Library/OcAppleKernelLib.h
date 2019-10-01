@@ -15,6 +15,8 @@
 #ifndef OC_APPLE_KERNEL_LIB_H
 #define OC_APPLE_KERNEL_LIB_H
 
+#include <IndustryStandard/AppleMkext.h>
+
 #include <Library/OcCpuLib.h>
 #include <Library/OcMachoLib.h>
 #include <Library/OcXmlLib.h>
@@ -43,8 +45,15 @@
 #define INFO_BUNDLE_VERSION_KEY                   "CFBundleVersion"
 #define INFO_BUNDLE_COMPATIBLE_VERSION_KEY        "OSBundleCompatibleVersion"
 
+#define MKEXT_INFO_DICTIONARIES_KEY               "_MKEXTInfoDictionaries"
+#define MKEXT_BUNDLE_PATH_KEY                     "_MKEXTBundlePath"
+#define MKEXT_EXECUTABLE_RELATIVE_PATH_KEY        "_MKEXTExecutableRelativePath"
+#define MKEXT_EXECUTABLE_KEY                      "_MKEXTExecutable"
+
+
 
 #define PRELINK_INFO_INTEGER_ATTRIBUTES           "size=\"64\""
+#define MKEXT_INFO_INTEGER_ATTRIBUTES             "size=\"32\""
 
 //
 // Failsafe default for plist reserve allocation.
@@ -194,6 +203,50 @@ typedef struct {
   UINT32       Limit;
 } PATCHER_GENERIC_PATCH;
 
+//
+// Mkext context.
+//
+typedef struct {
+  //
+  // Current version of mkext. It takes a reference of user-allocated
+  // memory block from pool, and grows if needed.
+  //
+  UINT8                    *Mkext;
+  //
+  // Exportable mkext size, i.e. the payload size. Also references user field.
+  //
+  UINT32                   MkextSize;
+  //
+  // Currently allocated mkext size, used for reduced rellocations.
+  //
+  UINT32                   MkextAllocSize;
+  //
+  // Mkext header.
+  //
+  MKEXT_HEADER_ANY         *MkextHeader;
+  //
+  // Version.
+  //
+  UINT32                    MkextVersion;
+  //
+  // Offset of mkext plist.
+  //
+  UINT32                    MkextInfoOffset;
+  //
+  // Copy of mkext plist used for XML_DOCUMENT.
+  // Freed upon context destruction.
+  //
+  CHAR8                    *MkextInfo;
+  //
+  // Parsed instance of mkext plist. New entries are added here.
+  //
+  XML_DOCUMENT             *MkextInfoDocument;
+  //
+  // Array of kexts.
+  //
+  XML_NODE                 *MkextKexts;
+} MKEXT_CONTEXT;
+
 /**
   Read Apple kernel for target architecture (possibly decompressing)
   into pool allocated buffer.
@@ -211,6 +264,15 @@ ReadAppleKernel (
   IN     EFI_FILE_PROTOCOL  *File,
   IN OUT UINT8              **Kernel,
      OUT UINT32             *KernelSize,
+     OUT UINT32             *AllocatedSize,
+  IN     UINT32             ReservedSize
+  );
+
+RETURN_STATUS
+ReadAppleMkext (
+  IN     EFI_FILE_PROTOCOL  *File,
+  IN OUT UINT8              **Mkext,
+     OUT UINT32             *MkextSize,
      OUT UINT32             *AllocatedSize,
   IN     UINT32             ReservedSize
   );
@@ -535,6 +597,29 @@ PatchPanicKextDump (
 RETURN_STATUS
 PatchLapicKernelPanic (
   IN OUT PATCHER_CONTEXT  *Patcher
+  );
+
+RETURN_STATUS
+MkextContextInit (
+  IN OUT  MKEXT_CONTEXT      *Context,
+  IN OUT  UINT8              *Mkext,
+  IN      UINT32             MkextSize,
+  IN      UINT32             MkextAllocSize
+  );
+
+RETURN_STATUS
+MkextInjectKext (
+  IN OUT MKEXT_CONTEXT      *Context,
+  IN     CONST CHAR8        *BundlePath,
+  IN     CONST CHAR8        *InfoPlist,
+  IN     UINT32             InfoPlistSize,
+  IN     UINT8              *Executable OPTIONAL,
+  IN     UINT32             ExecutableSize OPTIONAL
+  );
+
+RETURN_STATUS
+MkextInjectComplete (
+  IN OUT MKEXT_CONTEXT      *Context
   );
 
 #endif // OC_APPLE_KERNEL_LIB_H
