@@ -393,32 +393,47 @@ ParseFatArchitectures (
 }
 
 STATIC
-VOID
+UINT32
 CreateFatHeader (
-  IN OUT UINT8          *Kernel,
-  IN     UINT32         KernelSize,
-  IN     UINT32         Offset32,
+  IN OUT UINT8          *Buffer,
+  IN     UINT32         BufferSize,
   IN     UINT32         Size32,
-  IN     UINT32         Offset64,
-  IN     UINT32         Size64
+  IN     UINT32         AllocatedSize32,
+  IN     UINT32         Size64,
+  IN     UINT32         AllocatedSize64,
+  OUT    UINT32         *Offset32,
+  OUT    UINT32         *Offset64
   )
 {
   MACH_FAT_HEADER   *FatHeader;
+  UINT32            FatHeaderSize;
+  UINT32            FatBinarySize;
+  
+  if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
+    || OcOverflowTriAddU32 (FatHeaderSize, AllocatedSize32, AllocatedSize64, &FatBinarySize)
+    || BufferSize < FatBinarySize) {
+    return 0;
+  }
 
-  FatHeader       = (MACH_FAT_HEADER*)Kernel;
-  FatHeader->Signature = MACH_FAT_BINARY_INVERT_SIGNATURE;
-  FatHeader->NumberOfFatArch = SwapBytes32 (KERNEL_FAT_ARCH_COUNT);
+  *Offset32 = FatHeaderSize;
+  *Offset64 = *Offset32 + AllocatedSize32;
+
+  FatHeader                         = (MACH_FAT_HEADER*)Buffer;
+  FatHeader->Signature              = MACH_FAT_BINARY_INVERT_SIGNATURE;
+  FatHeader->NumberOfFatArch        = SwapBytes32 (KERNEL_FAT_ARCH_COUNT);
 
   FatHeader->FatArch[0].CpuType     = SwapBytes32 (MachCpuTypeX86);
   FatHeader->FatArch[0].CpuSubtype  = SwapBytes32 (MachCpuSubtypeX86All);
-  FatHeader->FatArch[0].Offset      = SwapBytes32 (Offset32);
+  FatHeader->FatArch[0].Offset      = SwapBytes32 (*Offset32);
   FatHeader->FatArch[0].Size        = SwapBytes32 (Size32);
   // Alignment?
 
   FatHeader->FatArch[1].CpuType     = SwapBytes32 (MachCpuTypeX8664);
   FatHeader->FatArch[1].CpuSubtype  = SwapBytes32 (MachCpuSubtypeX86All);
-  FatHeader->FatArch[1].Offset      = SwapBytes32 (Offset64);
+  FatHeader->FatArch[1].Offset      = SwapBytes32 (*Offset64);
   FatHeader->FatArch[1].Size        = SwapBytes32 (Size64);
+
+  return FatHeaderSize + AllocatedSize32 + AllocatedSize64;
 }
 
 STATIC
@@ -568,46 +583,59 @@ ReadAppleKernelImage2 (
 
 STATIC
 RETURN_STATUS
-ReadAppleKernel2 (
-  IN  EFI_FILE_PROTOCOL  *File,
-  IN  UINT32             ReservedSize,
-  OUT UINT8              **Kernel,
-  OUT UINT32             *KernelSize,
-  OUT UINT32             *AllocatedSize,
-  OUT BOOLEAN            *FatKernel
+ReadAppleMkextImage2 (
+  IN     EFI_FILE_PROTOCOL  *File,
+  IN     UINT32             Offset,
+  IN OUT UINT8              *Mkext,
+  IN     UINT32             MkextSize
   )
 {
-  RETURN_STATUS        Status;
-  UINT32            *MagicPtr;
-  //BOOLEAN           ForbidFat;
-  //BOOLEAN           Compressed;
-  BOOLEAN           IsFat;
+  RETURN_STATUS       Status;
+  MKEXT_HEADER_ANY    *MkextHeader;
 
-  UINT8             *BufferHeader;
+  DEBUG ((DEBUG_INFO, "Reading %u bytes from 0x%X to %p\n", KERNEL_HEADER_SIZE, Offset, Mkext));
+  Status = GetFileData (File, Offset, KERNEL_HEADER_SIZE, Mkext);
+  if (RETURN_ERROR (Status)) {
+    return RETURN_INVALID_PARAMETER;
+  }
 
-  UINT32            KernelOffset32;
-  UINT32            KernelOffset64;
-  UINT32            KernelOffsetSingle;
-  UINT32            KernelSize32;
-  UINT32            KernelSize64;
-  UINT32            KernelSizeSingle;
+  MkextHeader = (MKEXT_HEADER_ANY*)Mkext;
+  if (MkextHeader->Common.Magic == MKEXT_INVERT_MAGIC
+    && MkextHeader->Common.Signature == MKEXT_INVERT_SIGNATURE) {
+    DEBUG ((DEBUG_INFO, "Reading %u bytes from 0x%X\n", MkextSize, Offset));
+    Status = GetFileData (File, Offset, MkextSize, Mkext);
+    if (RETURN_ERROR (Status)) {
+      return RETURN_INVALID_PARAMETER;
+    }
+  } else {
+    //
+    // Unknown type.
+    //
+    return RETURN_INVALID_PARAMETER;
+  }
 
-  UINT32            KernelOffsetFat32;
-  UINT32            KernelOffsetFat64;
+  return RETURN_SUCCESS;
+}
 
-  UINT32            DecompSize32;
-  UINT32            DecompSize64;
-  UINT32            DecompSizeSingle;
-  UINT32            FatHeaderSize;
+STATIC
+RETURN_STATUS
+ParseBinary (
+  IN  EFI_FILE_PROTOCOL  *File,
+  OUT UINT32             *OffsetA,
+  OUT UINT32             *SizeA,
+  OUT UINT32             *SizeActualA,
+  OUT UINT32             *OffsetB,
+  OUT UINT32             *SizeB,
+  OUT UINT32             *SizeActualB,
+  OUT BOOLEAN            *IsFat
+  )
+{
+  RETURN_STATUS         Status;
+  UINT32                *MagicPtr;
+  UINT8                 *BufferHeader;
+  UINT32                FileSize;
 
-  ASSERT (File != NULL);
-  ASSERT (Kernel != NULL);
-  ASSERT (KernelSize != NULL);
-  ASSERT (AllocatedSize != NULL);
-  ASSERT (FatKernel != NULL);
-
-  *KernelSize         = 0;
-  BufferHeader        = AllocatePool (KERNEL_HEADER_SIZE);
+  BufferHeader = AllocatePool (KERNEL_HEADER_SIZE);
   if (BufferHeader == NULL) {
     return RETURN_INVALID_PARAMETER;
   }
@@ -617,124 +645,276 @@ ReadAppleKernel2 (
   //
   Status = GetFileData (File, 0, KERNEL_HEADER_SIZE, BufferHeader);
   if (RETURN_ERROR (Status)) {
+    FreePool (BufferHeader);
     return Status;
   }
   MagicPtr = (UINT32*)BufferHeader;
 
-  Status = GetFileSize (File, KernelSize);
+  Status = GetFileSize (File, &FileSize);
   if (RETURN_ERROR (Status)) {
     DEBUG ((DEBUG_INFO, "Kernel size cannot be determined - %r\n", Status));
+    FreePool (BufferHeader);
     return RETURN_OUT_OF_RESOURCES;
   }
 
   //
-  // Fat kernel.
+  // Fat binary.
   //
   if (*MagicPtr == MACH_FAT_BINARY_SIGNATURE
     || *MagicPtr == MACH_FAT_BINARY_INVERT_SIGNATURE) {
-    if (!ParseFatArchitectures (BufferHeader, KERNEL_HEADER_SIZE, &KernelOffset32, &KernelSize32, &KernelOffset64, &KernelSize64)) {
+    if (!ParseFatArchitectures (BufferHeader, KERNEL_HEADER_SIZE, OffsetA, SizeA, OffsetB, SizeB)) {
+      FreePool (BufferHeader);
       return RETURN_INVALID_PARAMETER;
     }
 
-    if (KernelSize32 > 0) {
-      Status = GetFileData (File, KernelOffset32, KERNEL_HEADER_SIZE, BufferHeader);
+    if (*SizeA > 0) {
+      Status = GetFileData (File, *OffsetA, KERNEL_HEADER_SIZE, BufferHeader);
       if (RETURN_ERROR (Status)) {
+        FreePool (BufferHeader);
         return Status;
       }
-      if (!GetDecompressedSize (BufferHeader, KernelSize32, &DecompSize32)) {
+      if (!GetDecompressedSize (BufferHeader, *SizeA, SizeActualA)) {
+        FreePool (BufferHeader);
         return RETURN_INVALID_PARAMETER;
       }
-      DecompSize32 = MACHO_ALIGN (DecompSize32);
+      *SizeActualA = MACHO_ALIGN (*SizeActualA);
     }
-    if (KernelSize64 > 0) {
-      Status = GetFileData (File, KernelOffset64, KERNEL_HEADER_SIZE, BufferHeader);
+    if (*SizeB > 0) {
+      Status = GetFileData (File, *OffsetB, KERNEL_HEADER_SIZE, BufferHeader);
       if (RETURN_ERROR (Status)) {
+        FreePool (BufferHeader);
         return Status;
       }
-      if (!GetDecompressedSize (BufferHeader, KernelSize64, &DecompSize64)) {
+      if (!GetDecompressedSize (BufferHeader, *SizeB, SizeActualB)) {
+        FreePool (BufferHeader);
         return RETURN_INVALID_PARAMETER;
       }
-      DecompSize64 = MACHO_ALIGN (DecompSize64);
+      *SizeActualB = MACHO_ALIGN (*SizeActualB);
     }
-
-    DEBUG ((DEBUG_INFO, "32-bit size: %u (%u) 64-bit size: %u (%u)\n", KernelSize32, DecompSize32, KernelSize64, DecompSize64));
-
 
     //
     // If both arches are present, calculate for fat binary.
     //
-    if (DecompSize32 > 0 && DecompSize64 > 0) {
-      IsFat = TRUE; // TODO: alignment calculations / round up.
-      if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
-        || OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, ReservedSize, FatHeaderSize, AllocatedSize)
-        || OcOverflowTriAddU32 (*AllocatedSize, DecompSize32, DecompSize64, AllocatedSize)) {
-        return RETURN_INVALID_PARAMETER;
-      }
+    if (*SizeActualA > 0 && *SizeActualB > 0) {
+      *IsFat = TRUE;
 
     //
     // Only a single valid arch.
     //
     } else {
-      IsFat = FALSE;
-      if (DecompSize32 > 0) {
-        KernelOffsetSingle = KernelOffset32;
-        KernelSizeSingle   = KernelSize32;
-        DecompSizeSingle   = DecompSize32;
-      } else {
-        KernelOffsetSingle = KernelOffset64;
-        KernelSizeSingle   = KernelSize64;
-        DecompSizeSingle   = DecompSize64;
-      }
+      *IsFat = FALSE;
+      if (*SizeActualB > 0) {
+        *OffsetA        = *OffsetB;
+        *SizeA          = *SizeB;
+        *SizeActualA    = *SizeActualB;
 
-      if (OcOverflowAddU32 (DecompSizeSingle, ReservedSize, AllocatedSize)) {
-        return RETURN_INVALID_PARAMETER;
+        *OffsetB        = 0;
+        *SizeB          = 0;
+        *SizeActualB    = 0;
       }
     }
   
   //
-  // Fat-free proper kernel.
+  // Fat-free proper binary.
   //
   } else {
-    IsFat              = FALSE;
-    KernelOffsetSingle = 0;
-    KernelSizeSingle   = *KernelSize;
-    if (!GetDecompressedSize (BufferHeader, KernelSizeSingle, &DecompSizeSingle)) {
+    *IsFat              = FALSE;
+    *OffsetA           = 0;
+    *SizeA             = FileSize;
+    if (!GetDecompressedSize (BufferHeader, *SizeA, SizeActualA)) {
+      FreePool (BufferHeader);
       return RETURN_INVALID_PARAMETER;
     }
-    if (OcOverflowAddU32 (DecompSizeSingle, ReservedSize, AllocatedSize)) {
+
+    *OffsetB          = 0;
+    *SizeB            = 0;
+    *SizeActualB      = 0;
+  }
+
+  FreePool (BufferHeader);
+  return RETURN_SUCCESS;
+}
+
+STATIC
+RETURN_STATUS
+ReadAppleKernel2 (
+  IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             ReservedSize,
+  OUT UINT8              **Kernel,
+  OUT UINT32             *KernelSize,
+  OUT UINT32             *AllocatedSize,
+  OUT BOOLEAN            *IsFat
+  )
+{
+  RETURN_STATUS     Status;
+  UINT32            OffsetA;
+  UINT32            OffsetB;
+  UINT32            SizeA;
+  UINT32            SizeB;
+  UINT32            SizeActualA;
+  UINT32            SizeActualB;
+
+  UINT32            OffsetFatA;
+  UINT32            OffsetFatB;
+  UINT32            FatHeaderSize;
+
+  ASSERT (File != NULL);
+  ASSERT (Kernel != NULL);
+  ASSERT (KernelSize != NULL);
+  ASSERT (AllocatedSize != NULL);
+  ASSERT (IsFat != NULL);
+
+  Status = ParseBinary (File, &OffsetA, &SizeA, &SizeActualA, &OffsetB, &SizeB, &SizeActualB, IsFat);
+  if (*IsFat) {
+    if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
+      || OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, ReservedSize, FatHeaderSize, AllocatedSize)
+      || OcOverflowTriAddU32 (*AllocatedSize, SizeActualA, SizeActualB, AllocatedSize)) {
+      return RETURN_INVALID_PARAMETER;
+    }
+  } else {
+    if (OcOverflowAddU32 (SizeActualA, ReservedSize, AllocatedSize)) {
       return RETURN_INVALID_PARAMETER;
     }
   }
 
-  //
-  // Allocate kernel space.
-  //
   *Kernel = AllocatePool (*AllocatedSize);
   if (*Kernel == NULL) {
     return RETURN_OUT_OF_RESOURCES;
   }
 
-  if (IsFat) {
+  if (*IsFat) {
     //
     // Read both kernels.
     //
-    KernelOffsetFat32 = FatHeaderSize;
-    KernelOffsetFat64 = KernelOffsetFat32 + MACHO_ALIGN (DecompSize64) + ReservedSize;
+    *KernelSize = CreateFatHeader (
+      *Kernel,
+      *AllocatedSize,
+      SizeActualA,
+      SizeActualA + ReservedSize,
+      SizeActualB,
+      SizeActualB + ReservedSize,
+      &OffsetFatA,
+      &OffsetFatB
+      );
+    if (*KernelSize == 0) {
+      FreePool (*Kernel);
+      return RETURN_INVALID_PARAMETER;
+    }
 
-    CreateFatHeader (*Kernel, *AllocatedSize, KernelOffsetFat32, DecompSize32, KernelOffsetFat64, DecompSize64);
-    Status = ReadAppleKernelImage2 (File, KernelOffset32, &((*Kernel)[KernelOffsetFat32]), KernelSize32);
-    Status = ReadAppleKernelImage2 (File, KernelOffset64, &((*Kernel)[KernelOffsetFat64]), KernelSize64);
+    Status = ReadAppleKernelImage2 (File, OffsetA, &((*Kernel)[OffsetFatA]), SizeA);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Kernel);
+      return RETURN_INVALID_PARAMETER; 
+    }
+    Status = ReadAppleKernelImage2 (File, OffsetB, &((*Kernel)[OffsetFatB]), SizeB);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Kernel);
+      return RETURN_INVALID_PARAMETER; 
+    }
   } else {
     //
     // Read single kernel.
     //
-    Status = ReadAppleKernelImage2 (File, KernelOffsetSingle, *Kernel, KernelSizeSingle);
+    *KernelSize = SizeActualA;
+    Status = ReadAppleKernelImage2 (File, OffsetA, *Kernel, SizeA);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Kernel);
+      return RETURN_INVALID_PARAMETER; 
+    }
   }
 
-  DEBUG ((DEBUG_INFO, "reserve %u alloc %u\n", ReservedSize, *AllocatedSize));
-  //while (TRUE);
+  return RETURN_SUCCESS;
+}
 
-  return 0;
+STATIC
+RETURN_STATUS
+ReadAppleMkext2 (
+  IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             ReservedSize,
+  OUT UINT8              **Mkext,
+  OUT UINT32             *MkextSize,
+  OUT UINT32             *AllocatedSize,
+  OUT BOOLEAN            *IsFat
+  )
+{
+  RETURN_STATUS     Status;
+  UINT32            OffsetA;
+  UINT32            OffsetB;
+  UINT32            SizeA;
+  UINT32            SizeB;
+  UINT32            SizeActualA;
+  UINT32            SizeActualB;
+
+  UINT32            OffsetFatA;
+  UINT32            OffsetFatB;
+  UINT32            FatHeaderSize;
+
+  ASSERT (File != NULL);
+  ASSERT (Mkext != NULL);
+  ASSERT (MkextSize != NULL);
+  ASSERT (AllocatedSize != NULL);
+  ASSERT (IsFat != NULL);
+
+  Status = ParseBinary (File, &OffsetA, &SizeA, &SizeActualA, &OffsetB, &SizeB, &SizeActualB, IsFat);
+  if (*IsFat) {
+    if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
+      || OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, ReservedSize, FatHeaderSize, AllocatedSize)
+      || OcOverflowTriAddU32 (*AllocatedSize, SizeActualA, SizeActualB, AllocatedSize)) {
+      return RETURN_INVALID_PARAMETER;
+    }
+  } else {
+    if (OcOverflowAddU32 (SizeActualA, ReservedSize, AllocatedSize)) {
+      return RETURN_INVALID_PARAMETER;
+    }
+  }
+
+  *Mkext = AllocatePool (*AllocatedSize);
+  if (*Mkext == NULL) {
+    return RETURN_OUT_OF_RESOURCES;
+  }
+
+  if (*IsFat) {
+    //
+    // Read both kernels.
+    //
+    *MkextSize = CreateFatHeader (
+      *Mkext,
+      *AllocatedSize,
+      SizeActualA,
+      SizeActualA + ReservedSize,
+      SizeActualB,
+      SizeActualB + ReservedSize,
+      &OffsetFatA,
+      &OffsetFatB
+      );
+    if (*MkextSize == 0) {
+      FreePool (*Mkext);
+      return RETURN_INVALID_PARAMETER;
+    }
+
+    Status = ReadAppleMkextImage2 (File, OffsetA, &((*Mkext)[OffsetFatA]), SizeA);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Mkext);
+      return RETURN_INVALID_PARAMETER; 
+    }
+    Status = ReadAppleMkextImage2 (File, OffsetB, &((*Mkext)[OffsetFatB]), SizeB);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Mkext);
+      return RETURN_INVALID_PARAMETER; 
+    }
+  } else {
+    //
+    // Read single kernel.
+    //
+    *MkextSize = SizeActualA;
+    Status = ReadAppleMkextImage2 (File, OffsetA, *Mkext, SizeA);
+    if (RETURN_ERROR (Status)) {
+      FreePool (*Mkext);
+      return RETURN_INVALID_PARAMETER; 
+    }
+  }
+
+  return RETURN_SUCCESS;
 }
 
 STATIC
