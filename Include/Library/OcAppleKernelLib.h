@@ -247,6 +247,24 @@ typedef struct {
   XML_NODE                 *MkextKexts;
 } MKEXT_CONTEXT;
 
+BOOLEAN
+ParseFatArchitectures (
+  IN  UINT8               *BufferFat,
+  IN  UINT32              BufferFatSize,
+  OUT UINT32              *BufferOffset32,
+  OUT UINT32              *BufferSize32,
+  OUT UINT32              *BufferOffset64,
+  OUT UINT32              *BufferSize64
+  );
+
+BOOLEAN
+UpdateFatHeader (
+  IN OUT UINT8          *Buffer,
+  IN     UINT32         BufferSize,
+  IN     UINT32         Size32,
+  IN     UINT32         Size64
+  );
+
 /**
   Read Apple kernel for target architecture (possibly decompressing)
   into pool allocated buffer.
@@ -261,20 +279,24 @@ typedef struct {
 **/
 RETURN_STATUS
 ReadAppleKernel (
-  IN     EFI_FILE_PROTOCOL  *File,
-  IN OUT UINT8              **Kernel,
-     OUT UINT32             *KernelSize,
-     OUT UINT32             *AllocatedSize,
-  IN     UINT32             ReservedSize
+  IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             ReservedSize,
+  OUT UINT8              **Kernel,
+  OUT UINT32             *KernelSize,
+  OUT UINT32             *AllocatedSizeA,
+  OUT UINT32             *AllocatedSizeB,
+  OUT BOOLEAN            *IsFat
   );
 
 RETURN_STATUS
 ReadAppleMkext (
-  IN     EFI_FILE_PROTOCOL  *File,
-  IN OUT UINT8              **Mkext,
-     OUT UINT32             *MkextSize,
-     OUT UINT32             *AllocatedSize,
-  IN     UINT32             ReservedSize
+  IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             ReservedSize,
+  OUT UINT8              **Mkext,
+  OUT UINT32             *MkextSize,
+  OUT UINT32             *AllocatedSizeA,
+  OUT UINT32             *AllocatedSizeB,
+  OUT BOOLEAN            *IsFat
   );
 
 /**
