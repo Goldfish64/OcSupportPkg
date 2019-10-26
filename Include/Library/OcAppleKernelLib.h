@@ -621,6 +621,12 @@ PatchLapicKernelPanic (
   IN OUT PATCHER_CONTEXT  *Patcher
   );
 
+UINT32
+MkextGetFullSize (
+  IN UINT8    *Buffer,
+  IN UINT32   BufferSize
+  );
+
 RETURN_STATUS
 MkextContextInit (
   IN OUT  MKEXT_CONTEXT      *Context,
