@@ -99,6 +99,18 @@
 ///
 /// Apple bootloader quirks.
 ///
+
+
+#define OC_BOOTER_WL_ENTRY_FIELDS(_, __) \
+  _(UINT64                      , Address          ,     , 0       , () ) \
+  _(BOOLEAN                     , Enabled          ,     , FALSE   , () ) \
+  _(OC_STRING                   , Comment          ,     , OC_STRING_CONSTR ("", _, __), OC_DESTR (OC_STRING) )
+  OC_DECLARE (OC_BOOTER_WL_ENTRY)
+
+#define OC_BOOTER_WL_ARRAY_FIELDS(_, __) \
+  OC_ARRAY (OC_BOOTER_WL_ENTRY, _, __)
+  OC_DECLARE (OC_BOOTER_WL_ARRAY)
+
 #define OC_BOOTER_QUIRKS_FIELDS(_, __) \
   _(BOOLEAN                     , AvoidRuntimeDefrag        ,     , FALSE  , ()) \
   _(BOOLEAN                     , DevirtualiseMmio          ,     , FALSE  , ()) \
@@ -118,6 +130,7 @@
 /// Apple bootloader section.
 ///
 #define OC_BOOTER_CONFIG_FIELDS(_, __) \
+  _(OC_BOOTER_WL_ARRAY          , MmioWhitelist    ,     , OC_CONSTR2 (OC_BOOTER_WL_ARRAY, _, __)      , OC_DESTR (OC_BOOTER_WL_ARRAY)) \
   _(OC_BOOTER_QUIRKS            , Quirks           ,     , OC_CONSTR2 (OC_BOOTER_QUIRKS, _, __)        , OC_DESTR (OC_BOOTER_QUIRKS))
   OC_DECLARE (OC_BOOTER_CONFIG)
 
@@ -228,6 +241,7 @@
   _(BOOLEAN                     , ExternalDiskIcons           ,     , FALSE  , ()) \
   _(BOOLEAN                     , LapicKernelPanic            ,     , FALSE  , ()) \
   _(BOOLEAN                     , PanicNoKextDump             ,     , FALSE  , ()) \
+  _(BOOLEAN                     , PowerTimeoutKernelPanic     ,     , FALSE  , ()) \
   _(BOOLEAN                     , ThirdPartyTrim              ,     , FALSE  , ()) \
   _(BOOLEAN                     , XhciPortLimit               ,     , FALSE  , ())
   OC_DECLARE (OC_KERNEL_QUIRKS)
@@ -268,8 +282,10 @@
   _(UINT32                      , Target                      ,     , 0            , ())
   OC_DECLARE (OC_MISC_DEBUG)
 
-#define OCS_EXPOSE_BOOT_PATH 1U
-#define OCS_EXPOSE_VERSION   2U
+#define OCS_EXPOSE_BOOT_PATH   1U
+#define OCS_EXPOSE_VERSION_VAR 2U
+#define OCS_EXPOSE_VERSION_UI  4U
+#define OCS_EXPOSE_VERSION     (OCS_EXPOSE_VERSION_VAR | OCS_EXPOSE_VERSION_UI)
 
 #define OC_MISC_SECURITY_FIELDS(_, __) \
   _(UINT32                      , ScanPolicy                  ,      , OC_SCAN_DEFAULT_POLICY  , ()) \
@@ -472,6 +488,7 @@ OC_DECLARE (OC_UEFI_INPUT)
   _(BOOLEAN                     , IgnoreTextInGraphics        ,     , FALSE  , ()) \
   _(BOOLEAN                     , ReleaseUsbOwnership         ,     , FALSE  , ()) \
   _(BOOLEAN                     , RequestBootVarRouting       ,     , FALSE  , ()) \
+  _(BOOLEAN                     , ReconnectOnResChange        ,     , FALSE  , ()) \
   _(BOOLEAN                     , ProvideConsoleGop           ,     , FALSE  , ()) \
   _(BOOLEAN                     , SanitiseClearScreen         ,     , FALSE  , ()) \
   _(BOOLEAN                     , ClearScreenOnModeSwitch     ,     , FALSE  , ()) \

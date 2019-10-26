@@ -33,6 +33,19 @@
 #error "Unsupported architecture!"
 #endif
 
+//
+// The kernel is normally allocated at base 0x100000 + slide address.
+//
+// For slide=0x1~0x7F the kernel is allocated from
+// 0x100000 + 0x200000 till 0x100000 + 0xFE00000.
+//
+// For slide = 0x80~0xFF on Sandy Bridge or Ivy Bridge CPUs from
+// 0x100000 + 0x20200000 till 0x100000? + 0x30000000??.
+//
+// For slide = 0x80~0xFF on Other CPUs from
+// 0x100000 + 0x10000000 till 0x100000 + 0x1FE00000.
+//
+
 /**
   Maximum number of supported runtime reloc protection areas.
   Currently hardocded for simplicity.
@@ -63,7 +76,7 @@
 /**
   Slide offset per slide entry
 **/
-#define SLIDE_GRANULARITY        ((UINTN) 0x200000)
+#define SLIDE_GRANULARITY        ((UINTN) SIZE_2MB)
 
 /**
   Total possible number of KASLR slide offsets.
@@ -83,7 +96,7 @@
 /**
   Assume the kernel is roughly 128 MBs.
 **/
-#define ESTIMATED_KERNEL_SIZE    ((UINTN) 0x8000000)
+#define ESTIMATED_KERNEL_SIZE    ((UINTN) SIZE_128MB)
 
 /**
   Preserved relocation entry.
@@ -191,6 +204,10 @@ typedef struct SERVICES_OVERRIDE_STATE_ {
   /// TRUE if we are using custom KASLR slide (via boot arg).
   ///
   BOOLEAN                       AppleCustomSlide;
+  ///
+  /// TRUE if we are done reporting MMIO cleanup.
+  ///
+  BOOLEAN                       ReportedMmio;
 } SERVICES_OVERRIDE_STATE;
 
 /**
@@ -437,15 +454,16 @@ AppleSlideUnlockForSafeMode (
   UEFI RuntimeServices GetVariable call and thus is useful to
   perform KASLR slide injection through boot-args.
 
-  @param[in,out]  BootCompat    Boot compatibility context.
-  @param[in]      GetVariable   Original UEFI GetVariable service.
-  @param[in]      GetMemoryMap  Unmodified GetMemoryMap pointer, optional.
-  @param[in]      FilterMap     GetMemoryMap result filter, optional.
-  @param[in]      VariableName  GetVariable variable name argument.
-  @param[in]      VendorGuid    GetVariable vendor GUID argument.
-  @param[out]     Attributes    GetVariable attributes argument.
-  @param[in,out]  DataSize      GetVariable data size argument.
-  @param[out]     Data          GetVariable data argument.
+  @param[in,out]  BootCompat       Boot compatibility context.
+  @param[in]      GetVariable      Original UEFI GetVariable service.
+  @param[in]      GetMemoryMap     Unmodified GetMemoryMap pointer, optional.
+  @param[in]      FilterMap        GetMemoryMap result filter, optional.
+  @param[in]      FilterMapContext FilterMap context, optional.
+  @param[in]      VariableName     GetVariable variable name argument.
+  @param[in]      VendorGuid       GetVariable vendor GUID argument.
+  @param[out]     Attributes       GetVariable attributes argument.
+  @param[in,out]  DataSize         GetVariable data size argument.
+  @param[out]     Data             GetVariable data argument.
 
   @retval GetVariable status code.
 **/
@@ -455,6 +473,7 @@ AppleSlideGetVariable (
   IN     EFI_GET_VARIABLE      GetVariable,
   IN     EFI_GET_MEMORY_MAP    GetMemoryMap  OPTIONAL,
   IN     OC_MEMORY_FILTER      FilterMap     OPTIONAL,
+  IN     VOID                  *FilterMapContext  OPTIONAL,
   IN     CHAR16                *VariableName,
   IN     EFI_GUID              *VendorGuid,
      OUT UINT32                *Attributes   OPTIONAL,

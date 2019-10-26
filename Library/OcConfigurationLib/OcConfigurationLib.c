@@ -23,6 +23,8 @@ OC_ARRAY_STRUCTORS (OC_ACPI_PATCH_ARRAY)
 OC_STRUCTORS       (OC_ACPI_QUIRKS, ())
 OC_STRUCTORS       (OC_ACPI_CONFIG, ())
 
+OC_STRUCTORS       (OC_BOOTER_WL_ENTRY, ())
+OC_ARRAY_STRUCTORS (OC_BOOTER_WL_ARRAY)
 OC_STRUCTORS       (OC_BOOTER_QUIRKS, ())
 OC_STRUCTORS       (OC_BOOTER_CONFIG, ())
 
@@ -147,6 +149,18 @@ mAcpiConfigurationSchema[] = {
 
 STATIC
 OC_SCHEMA
+mBooterWhitelistEntrySchema[] = {
+  OC_SCHEMA_INTEGER_IN   ("Address", OC_BOOTER_WL_ENTRY, Address),
+  OC_SCHEMA_STRING_IN    ("Comment", OC_BOOTER_WL_ENTRY, Comment),
+  OC_SCHEMA_BOOLEAN_IN   ("Enabled", OC_BOOTER_WL_ENTRY, Enabled)
+};
+
+STATIC
+OC_SCHEMA
+mBooterWhitelistSchema = OC_SCHEMA_DICT (NULL, mBooterWhitelistEntrySchema);
+
+STATIC
+OC_SCHEMA
 mBooterQuirksSchema[] = {
   OC_SCHEMA_BOOLEAN_IN ("AvoidRuntimeDefrag",     OC_GLOBAL_CONFIG, Booter.Quirks.AvoidRuntimeDefrag),
   OC_SCHEMA_BOOLEAN_IN ("DevirtualiseMmio",       OC_GLOBAL_CONFIG, Booter.Quirks.DevirtualiseMmio),
@@ -165,7 +179,8 @@ mBooterQuirksSchema[] = {
 STATIC
 OC_SCHEMA
 mBooterConfigurationSchema[] = {
-  OC_SCHEMA_DICT       ("Quirks", mBooterQuirksSchema),
+  OC_SCHEMA_ARRAY_IN   ("MmioWhitelist",   OC_GLOBAL_CONFIG, Booter.MmioWhitelist, &mBooterWhitelistSchema),
+  OC_SCHEMA_DICT       ("Quirks",          mBooterQuirksSchema),
 };
 
 
@@ -263,16 +278,17 @@ mKernelPatchSchema = OC_SCHEMA_DICT (NULL, mKernelPatchSchemaEntry);
 STATIC
 OC_SCHEMA
 mKernelQuirksSchema[] = {
-  OC_SCHEMA_BOOLEAN_IN ("AppleCpuPmCfgLock",  OC_GLOBAL_CONFIG, Kernel.Quirks.AppleCpuPmCfgLock),
-  OC_SCHEMA_BOOLEAN_IN ("AppleXcpmCfgLock",   OC_GLOBAL_CONFIG, Kernel.Quirks.AppleXcpmCfgLock),
-  OC_SCHEMA_BOOLEAN_IN ("AppleXcpmExtraMsrs", OC_GLOBAL_CONFIG, Kernel.Quirks.AppleXcpmExtraMsrs),
-  OC_SCHEMA_BOOLEAN_IN ("CustomSMBIOSGuid",   OC_GLOBAL_CONFIG, Kernel.Quirks.CustomSmbiosGuid),
-  OC_SCHEMA_BOOLEAN_IN ("DisableIoMapper",    OC_GLOBAL_CONFIG, Kernel.Quirks.DisableIoMapper),
-  OC_SCHEMA_BOOLEAN_IN ("ExternalDiskIcons",  OC_GLOBAL_CONFIG, Kernel.Quirks.ExternalDiskIcons),
-  OC_SCHEMA_BOOLEAN_IN ("LapicKernelPanic",   OC_GLOBAL_CONFIG, Kernel.Quirks.LapicKernelPanic),
-  OC_SCHEMA_BOOLEAN_IN ("PanicNoKextDump",    OC_GLOBAL_CONFIG, Kernel.Quirks.PanicNoKextDump),
-  OC_SCHEMA_BOOLEAN_IN ("ThirdPartyTrim",     OC_GLOBAL_CONFIG, Kernel.Quirks.ThirdPartyTrim),
-  OC_SCHEMA_BOOLEAN_IN ("XhciPortLimit",      OC_GLOBAL_CONFIG, Kernel.Quirks.XhciPortLimit),
+  OC_SCHEMA_BOOLEAN_IN ("AppleCpuPmCfgLock",       OC_GLOBAL_CONFIG, Kernel.Quirks.AppleCpuPmCfgLock),
+  OC_SCHEMA_BOOLEAN_IN ("AppleXcpmCfgLock",        OC_GLOBAL_CONFIG, Kernel.Quirks.AppleXcpmCfgLock),
+  OC_SCHEMA_BOOLEAN_IN ("AppleXcpmExtraMsrs",      OC_GLOBAL_CONFIG, Kernel.Quirks.AppleXcpmExtraMsrs),
+  OC_SCHEMA_BOOLEAN_IN ("CustomSMBIOSGuid",        OC_GLOBAL_CONFIG, Kernel.Quirks.CustomSmbiosGuid),
+  OC_SCHEMA_BOOLEAN_IN ("DisableIoMapper",         OC_GLOBAL_CONFIG, Kernel.Quirks.DisableIoMapper),
+  OC_SCHEMA_BOOLEAN_IN ("ExternalDiskIcons",       OC_GLOBAL_CONFIG, Kernel.Quirks.ExternalDiskIcons),
+  OC_SCHEMA_BOOLEAN_IN ("LapicKernelPanic",        OC_GLOBAL_CONFIG, Kernel.Quirks.LapicKernelPanic),
+  OC_SCHEMA_BOOLEAN_IN ("PanicNoKextDump",         OC_GLOBAL_CONFIG, Kernel.Quirks.PanicNoKextDump),
+  OC_SCHEMA_BOOLEAN_IN ("PowerTimeoutKernelPanic", OC_GLOBAL_CONFIG, Kernel.Quirks.PowerTimeoutKernelPanic),
+  OC_SCHEMA_BOOLEAN_IN ("ThirdPartyTrim",          OC_GLOBAL_CONFIG, Kernel.Quirks.ThirdPartyTrim),
+  OC_SCHEMA_BOOLEAN_IN ("XhciPortLimit",           OC_GLOBAL_CONFIG, Kernel.Quirks.XhciPortLimit),
 };
 
 STATIC
@@ -500,6 +516,7 @@ mUefiQuirksSchema[] = {
   OC_SCHEMA_BOOLEAN_IN ("IgnoreInvalidFlexRatio", OC_GLOBAL_CONFIG, Uefi.Quirks.IgnoreInvalidFlexRatio),
   OC_SCHEMA_BOOLEAN_IN ("IgnoreTextInGraphics",   OC_GLOBAL_CONFIG, Uefi.Quirks.IgnoreTextInGraphics),
   OC_SCHEMA_BOOLEAN_IN ("ProvideConsoleGop",      OC_GLOBAL_CONFIG, Uefi.Quirks.ProvideConsoleGop),
+  OC_SCHEMA_BOOLEAN_IN ("ReconnectOnResChange",   OC_GLOBAL_CONFIG, Uefi.Quirks.ReconnectOnResChange),
   OC_SCHEMA_BOOLEAN_IN ("ReleaseUsbOwnership",    OC_GLOBAL_CONFIG, Uefi.Quirks.ReleaseUsbOwnership),
   OC_SCHEMA_BOOLEAN_IN ("ReplaceTabWithSpace",    OC_GLOBAL_CONFIG, Uefi.Quirks.ReplaceTabWithSpace),
   OC_SCHEMA_BOOLEAN_IN ("RequestBootVarRouting",  OC_GLOBAL_CONFIG, Uefi.Quirks.RequestBootVarRouting),

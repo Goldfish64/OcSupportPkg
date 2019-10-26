@@ -169,6 +169,7 @@ ProtectCsmRegion (
   Mark MMIO virtual memory regions as non-runtime to reduce the amount
   of virtual memory required by boot.efi.
 
+  @param[in]      Context            Boot compatibility context.
   @param[in,out]  MemoryMapSize      Memory map size in bytes, updated on devirtualisation.
   @param[in,out]  MemoryMap          Memory map to devirtualise.
   @param[in]      DescriptorSize     Memory map descriptor size in bytes.
@@ -176,14 +177,23 @@ ProtectCsmRegion (
 STATIC
 VOID
 DevirtualiseMmio (
-  IN     UINTN                  MemoryMapSize,
-  IN OUT EFI_MEMORY_DESCRIPTOR  *MemoryMap,
-  IN     UINTN                  DescriptorSize
+  IN     VOID                        *Context,
+  IN     UINTN                       MemoryMapSize,
+  IN OUT EFI_MEMORY_DESCRIPTOR       *MemoryMap,
+  IN     UINTN                       DescriptorSize
   )
 {
-  UINTN                   NumEntries;
-  UINTN                   Index;
-  EFI_MEMORY_DESCRIPTOR   *Desc;
+  UINTN                       NumEntries;
+  UINTN                       Index;
+  UINTN                       Index2;
+  EFI_MEMORY_DESCRIPTOR       *Desc;
+  CONST EFI_PHYSICAL_ADDRESS  *Whitelist;
+  UINTN                       WhitelistSize;
+  BOOLEAN                     Skipped;
+  UINT64                      PagesSaved;
+
+  Whitelist     = ((BOOT_COMPAT_CONTEXT *) Context)->Settings.MmioWhitelist;
+  WhitelistSize = ((BOOT_COMPAT_CONTEXT *) Context)->Settings.MmioWhitelistSize;
 
   //
   // Some firmwares (normally Haswell and earlier) need certain MMIO areas to have
@@ -191,33 +201,59 @@ DevirtualiseMmio (
   // For example, on Intel Haswell with APTIO that would be:
   // 0xFED1C000 (SB_RCBA) is a 0x4 page memory region, containing SPI_BASE at 0x3800 (SPI_BASE_ADDRESS).
   // 0xFF000000 (PCI root) is a 0x1000 page memory region.
-  // Initially we wanted to make address exceptions, but later we decided to simply not care,
-  // as this quirk works best on newer firmwares anyway.
+  // One can make exceptions with Whitelist, as it is required on certain laptops.
   //
 
   Desc       = MemoryMap;
   NumEntries = MemoryMapSize / DescriptorSize;
+  PagesSaved = 0;
 
-  DEBUG ((DEBUG_INFO, "OCABC: MMIO devirt start\n"));
+  if (!((BOOT_COMPAT_CONTEXT *) Context)->ServiceState.ReportedMmio) {
+    DEBUG ((DEBUG_INFO, "OCABC: MMIO devirt start\n"));
+  }
 
   for (Index = 0; Index < NumEntries; ++Index) {
     if (Desc->NumberOfPages > 0
       && Desc->Type == EfiMemoryMappedIO
       && (Desc->Attribute & EFI_MEMORY_RUNTIME) != 0) {
-      DEBUG ((
-        DEBUG_INFO,
-        "OCABC: MMIO devirt 0x%Lx (0x%Lx pages, 0x%Lx)\n",
-        (UINT64) Desc->PhysicalStart,
-        (UINT64) Desc->NumberOfPages,
-        (UINT64) Desc->Attribute
-        ));
-      Desc->Attribute &= ~EFI_MEMORY_RUNTIME;
+
+      Skipped = FALSE;
+
+      for (Index2 = 0; Index2 < WhitelistSize; ++Index2) {
+        if (AREA_WITHIN_DESCRIPTOR (Desc, Whitelist[Index2], 1)) {
+          Skipped = TRUE;
+          break;
+        }
+      }
+
+      if (!((BOOT_COMPAT_CONTEXT *) Context)->ServiceState.ReportedMmio) {
+        DEBUG ((
+          DEBUG_INFO,
+          "OCABC: MMIO devirt 0x%Lx (0x%Lx pages, 0x%Lx) skip %d\n",
+          (UINT64) Desc->PhysicalStart,
+          (UINT64) Desc->NumberOfPages,
+          (UINT64) Desc->Attribute,
+          Skipped
+          ));
+      }
+
+      if (!Skipped) {
+        Desc->Attribute &= ~EFI_MEMORY_RUNTIME;
+        PagesSaved      += Desc->NumberOfPages;
+      }
     }
 
     Desc = NEXT_MEMORY_DESCRIPTOR (Desc, DescriptorSize);
   }
 
-  DEBUG ((DEBUG_INFO, "OCABC: MMIO devirt end\n"));
+  if (!((BOOT_COMPAT_CONTEXT *) Context)->ServiceState.ReportedMmio) {
+    DEBUG ((
+      DEBUG_INFO,
+      "OCABC: MMIO devirt end, saved %Lu KB\n",
+      EFI_PAGES_TO_SIZE (PagesSaved) / BASE_1KB
+      ));
+    ((BOOT_COMPAT_CONTEXT *) Context)->ServiceState.ReportedMmio = TRUE;
+  }
 }
 
 /**
@@ -423,6 +459,7 @@ OcGetMemoryMap (
 
     if (BootCompat->Settings.DevirtualiseMmio) {
       DevirtualiseMmio (
+        BootCompat,
         *MemoryMapSize,
         MemoryMap,
         *DescriptorSize
@@ -587,6 +624,7 @@ OcGetVariable (
       BootCompat->ServicePtrs.GetVariable,
       BootCompat->ServicePtrs.GetMemoryMap,
       BootCompat->Settings.DevirtualiseMmio ? DevirtualiseMmio : NULL,
+      BootCompat,
       VariableName,
       VendorGuid,
       Attributes,

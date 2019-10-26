@@ -310,6 +310,10 @@ OcScanForBootEntries (
       return EFI_OUT_OF_RESOURCES;
     }
   }
+  //
+  // Errors from within the loop are not fatal.
+  //
+  Status = EFI_SUCCESS;
 
   FreePool (Handles);
 
@@ -725,6 +729,7 @@ OcShowSimpleBootMenu (
   )
 {
   UINTN   Index;
+  UINTN   Length;
   INTN    KeyIndex;
   CHAR16  Code[2];
   UINT32  TimeOutSeconds;
@@ -735,7 +740,19 @@ OcShowSimpleBootMenu (
 
   while (TRUE) {
     gST->ConOut->ClearScreen (gST->ConOut);
-    gST->ConOut->OutputString (gST->ConOut, L"OpenCore Boot Menu\r\n\r\n");
+    gST->ConOut->OutputString (gST->ConOut, L"OpenCore Boot Menu");
+
+    if (Context->TitleSuffix != NULL) {
+      Length = AsciiStrLen (Context->TitleSuffix);
+      gST->ConOut->OutputString (gST->ConOut, L" (");
+      for (Index = 0; Index < Length; ++Index) {
+        Code[0] = Context->TitleSuffix[Index];
+        gST->ConOut->OutputString (gST->ConOut, Code);
+      }
+      gST->ConOut->OutputString (gST->ConOut, L")");
+    }
+
+    gST->ConOut->OutputString (gST->ConOut, L"\r\n\r\n");
 
     for (Index = 0; Index < MIN (Count, OC_INPUT_MAX); ++Index) {
       Code[0] = OC_INPUT_STR[Index];

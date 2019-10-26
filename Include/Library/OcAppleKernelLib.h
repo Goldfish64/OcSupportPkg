@@ -621,6 +621,16 @@ PatchLapicKernelPanic (
   IN OUT PATCHER_CONTEXT  *Patcher
   );
 
+/**
+  Disable power state change timeout kernel panic (10.15+).
+  @param Patcher  Patcher context.
+  @return  RETURN_SUCCESS on success.
+**/
+RETURN_STATUS
+PatchPowerStateTimeout (
+  IN OUT PATCHER_CONTEXT   *Patcher
+  );
+
 UINT32
 MkextGetFullSize (
   IN UINT8    *Buffer,
