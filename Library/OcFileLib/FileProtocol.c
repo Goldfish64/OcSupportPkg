@@ -266,9 +266,10 @@ SetFileData (
 
 EFI_STATUS
 AllocateCopyFileData (
-  IN  EFI_FILE_PROTOCOL  *File,
-  OUT UINT8              **Buffer,
-  OUT UINT32             *BufferSize
+  IN     EFI_FILE_PROTOCOL  *File,
+  IN     UINT32             Position,
+  IN OUT UINT32             *Size,
+  OUT    UINT8              **Buffer
   )
 {
   EFI_STATUS  Status;
@@ -282,23 +283,24 @@ AllocateCopyFileData (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+  if (*Size > ReadSize) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (*Size > 0) {
+    ReadSize = *Size;
+  }
 
   FileBuffer = AllocatePool (ReadSize);
   if (FileBuffer == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
-  Status = GetFileData (File, 0, ReadSize, FileBuffer);
+  Status = GetFileData (File, Position, ReadSize, FileBuffer);
   if (EFI_ERROR (Status)) {
     FreePool (FileBuffer);
     return Status;
   }
 
-  Status = File->SetPosition (File, 0);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
   *Buffer = FileBuffer;
-  *BufferSize = ReadSize;
+  *Size = ReadSize;
   return EFI_SUCCESS;
 }
