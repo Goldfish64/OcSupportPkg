@@ -228,6 +228,14 @@ typedef struct {
   // Version.
   //
   UINT32                    MkextVersion;
+
+  UINT32                    NumKexts;
+
+  //
+  // Available kext slots (v1 only).
+  //
+  UINT32                    AvailableKextSlots;
+
   //
   // Offset of mkext plist.
   //
@@ -291,6 +299,7 @@ ReadAppleKernel (
 RETURN_STATUS
 ReadAppleMkext (
   IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             NumReservedKexts,
   IN  UINT32             ReservedSize,
   OUT UINT8              **Mkext,
   OUT UINT32             *MkextSize,
@@ -632,9 +641,20 @@ PatchPowerStateTimeout (
   );
 
 UINT32
-MkextGetFullSize (
+MkextGetAllocatedSize (
   IN UINT8    *Buffer,
-  IN UINT32   BufferSize
+  IN UINT32   BufferSize,
+  IN UINT32   NumReservedKexts
+  );
+
+RETURN_STATUS
+MkextDecompress (
+  IN     UINT8    *Buffer,
+  IN     UINT32   BufferSize,
+  IN     UINT32   NumReservedKexts,
+  IN OUT UINT8    *OutBuffer,
+  IN     UINT32   OutBufferSize,
+  OUT    UINT32   *OutMkextSize
   );
 
 RETURN_STATUS
