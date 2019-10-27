@@ -329,40 +329,51 @@ ReadAppleKernelImage (
 }
 
 STATIC
+BOOLEAN
+GetMkextAllocatedSize (
+  IN  EFI_FILE_PROTOCOL   *File,
+  IN  UINT32              Offset,
+  IN  UINT32              Size,
+  IN  UINT32              NumReservedKexts,
+  IN  UINT32              ReservedSize,
+  OUT UINT8               **Buffer,
+  OUT UINT32              *AllocatedSize
+  )
+{
+  RETURN_STATUS     Status;
+  UINT32            MkextAllocatedSize;
+
+  Status = AllocateCopyFileData (File, Offset, &Size, Buffer);
+  if (RETURN_ERROR (Status)) {
+    return FALSE;
+  }
+
+  MkextAllocatedSize = MkextGetAllocatedSize (*Buffer, Size, NumReservedKexts);
+  if (MkextAllocatedSize == 0
+    || OcOverflowAddU32 (MkextAllocatedSize, ReservedSize, AllocatedSize)) {
+    FreePool (*Buffer);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+/*STATIC
 RETURN_STATUS
 ReadAppleMkextImage (
-  IN     EFI_FILE_PROTOCOL  *File,
-  IN     UINT32             Offset,
-  IN OUT UINT8              *Mkext,
-  IN     UINT32             MkextSize
+  IN     UINT8              *Mkext,
+  IN     UINT32             MkextSize,
+  IN     UINT32             NumReservedKexts,
+  IN OUT UINT8              *OutBuffer,
+  IN     UINT32             OutBufferSize
   )
 {
   RETURN_STATUS       Status;
-  MKEXT_HEADER_ANY    *MkextHeader;
 
-  DEBUG ((DEBUG_INFO, "Reading %u bytes from 0x%X to %p\n", KERNEL_HEADER_SIZE, Offset, Mkext));
-  Status = GetFileData (File, Offset, KERNEL_HEADER_SIZE, Mkext);
-  if (RETURN_ERROR (Status)) {
-    return RETURN_INVALID_PARAMETER;
-  }
+  return MkextDecompress (Mkext, MkextSize, NumReservedKexts, OutBuffer, OutBufferSize);
 
-  MkextHeader = (MKEXT_HEADER_ANY*)Mkext;
-  if (MkextHeader->Common.Magic == MKEXT_INVERT_MAGIC
-    && MkextHeader->Common.Signature == MKEXT_INVERT_SIGNATURE) {
-    DEBUG ((DEBUG_INFO, "Reading %u bytes from 0x%X (%u)\n", MkextSize, Offset, SwapBytes32 (MkextHeader->Common.Length)));
-    Status = GetFileData (File, Offset, MkextSize, Mkext);
-    if (RETURN_ERROR (Status)) {
-      return RETURN_INVALID_PARAMETER;
-    }
-  } else {
-    //
-    // Unknown type.
-    //
-    return RETURN_INVALID_PARAMETER;
-  }
-
-  return RETURN_SUCCESS;
-}
+ // return RETURN_SUCCESS;
+}*/
 
 STATIC
 RETURN_STATUS
@@ -582,46 +593,24 @@ ReadAppleKernel (
   return RETURN_SUCCESS;
 }
 
-STATIC
-UINT32
-GetMkextDecompressedSize (
-  IN EFI_FILE_PROTOCOL  *File,
-  IN UINT32             Offset,
-  IN UINT32             Size
-  )
-{
-  RETURN_STATUS     Status;
-  UINT8             *Buffer;
-  UINT32            DecompressedSize;
 
-  Buffer = AllocatePool (Size);
-  if (Buffer == NULL) {
-    return 0;
-  }
-
-  Status = GetFileData (File, Offset, Size, Buffer);
-  if (RETURN_ERROR (Status)) {
-    FreePool (Buffer);
-    return 0;
-  }
-
-  DecompressedSize = MkextGetFullSize (Buffer, Size);
-  FreePool (Buffer);
-  return DecompressedSize;
-}
 
 RETURN_STATUS
 ReadAppleMkext (
   IN  EFI_FILE_PROTOCOL  *File,
+  IN  UINT32             NumReservedKexts,
   IN  UINT32             ReservedSize,
-  OUT UINT8              **Mkext,
-  OUT UINT32             *MkextSize,
+  OUT UINT8              **Buffer,
+  OUT UINT32             *BufferSize,
   OUT UINT32             *AllocatedSizeA,
   OUT UINT32             *AllocatedSizeB,
   OUT BOOLEAN            *IsFat
   )
 {
   RETURN_STATUS     Status;
+
+  UINT8             *MkextA;
+  UINT8             *MkextB;
   UINT32            OffsetA;
   UINT32            OffsetB;
   UINT32            SizeA;
@@ -635,8 +624,8 @@ ReadAppleMkext (
   UINT32            AllocatedTotalSize;
 
   ASSERT (File != NULL);
-  ASSERT (Mkext != NULL);
-  ASSERT (MkextSize != NULL);
+  ASSERT (Buffer != NULL);
+  ASSERT (BufferSize != NULL);
   ASSERT (AllocatedSizeA != NULL);
   ASSERT (AllocatedSizeB != NULL);
   ASSERT (IsFat != NULL);
@@ -649,24 +638,18 @@ ReadAppleMkext (
     return RETURN_INVALID_PARAMETER;
   }
 
-  SizeActualA = GetMkextDecompressedSize (File, OffsetA, SizeA);
-  if (SizeActualA == 0) {
+  if (!GetMkextAllocatedSize (File, OffsetA, SizeA, NumReservedKexts, ReservedSize, &MkextA, AllocatedSizeA)) {
     return RETURN_INVALID_PARAMETER;
   }
-  
-  DEBUG ((DEBUG_INFO, "Size %u, uncomp %u\n", SizeA, SizeActualA));
-  if (OcOverflowAddU32 (SizeActualA, ReservedSize, AllocatedSizeA)) {
-    return RETURN_INVALID_PARAMETER;
-  }
+  DEBUG ((DEBUG_INFO, "Size %u, uncomp %u\n", SizeA, AllocatedSizeA));
 
   if (*IsFat) {
-    SizeActualB = GetMkextDecompressedSize (File, OffsetB, SizeB);
-    if (SizeActualB == 0) {
+    if (!GetMkextAllocatedSize (File, OffsetB, SizeB, NumReservedKexts, ReservedSize, &MkextB, AllocatedSizeB)) {
       return RETURN_INVALID_PARAMETER;
     }
     
     if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
-      || OcOverflowAddU32 (SizeActualB, ReservedSize, AllocatedSizeB)
+      //|| OcOverflowAddU32 (SizeActualB, ReservedSize, AllocatedSizeB)
       || OcOverflowTriAddU32 (FatHeaderSize, *AllocatedSizeA, *AllocatedSizeB, &AllocatedTotalSize)) {
       return RETURN_INVALID_PARAMETER;
     }
@@ -674,8 +657,8 @@ ReadAppleMkext (
     AllocatedTotalSize = *AllocatedSizeA;
   }
 
-  *Mkext = AllocatePool (AllocatedTotalSize);
-  if (*Mkext == NULL) {
+  *Buffer = AllocatePool (AllocatedTotalSize);
+  if (*Buffer == NULL) {
     return RETURN_OUT_OF_RESOURCES;
   }
 
@@ -683,8 +666,8 @@ ReadAppleMkext (
     //
     // Create fat header.
     //
-    *MkextSize = CreateFatHeader (
-      *Mkext,
+    *BufferSize = CreateFatHeader (
+      *Buffer,
       AllocatedTotalSize,
       SizeActualA,
       *AllocatedSizeA,
@@ -693,22 +676,24 @@ ReadAppleMkext (
       &OffsetFatA,
       &OffsetFatB
       );
-    if (*MkextSize == 0) {
-      FreePool (*Mkext);
+    if (*BufferSize == 0) {
+      FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER;
     }
 
     //
     // Read both mkexts.
     //
-    Status = ReadAppleMkextImage (File, OffsetA, &((*Mkext)[OffsetFatA]), SizeA);
+    //Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA);
+   // Status = ReadAppleMkextImage (File, OffsetA, &((*Buffer)[OffsetFatA]), SizeA, *AllocatedSizeA);
     if (RETURN_ERROR (Status)) {
-      FreePool (*Mkext);
+      FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
     }
-    Status = ReadAppleMkextImage (File, OffsetB, &((*Mkext)[OffsetFatB]), SizeB);
+    //Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB);
+  //  Status = ReadAppleMkextImage (File, OffsetB, &((*Buffer)[OffsetFatB]), SizeB, *AllocatedSizeB);
     if (RETURN_ERROR (Status)) {
-      FreePool (*Mkext);
+      FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
     }
   
@@ -716,10 +701,11 @@ ReadAppleMkext (
     //
     // Read single mkext.
     //
-    *MkextSize = SizeA;
-    Status = ReadAppleMkextImage (File, OffsetA, *Mkext, SizeA);
+   // *BufferSize = SizeA;
+    Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, *Buffer, *AllocatedSizeA, BufferSize);
+   // Status = ReadAppleMkextImage (File, OffsetA, *Buffer, SizeA, *AllocatedSizeA);
     if (RETURN_ERROR (Status)) {
-      FreePool (*Mkext);
+      FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
     }
   }
