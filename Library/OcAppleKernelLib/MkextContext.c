@@ -316,7 +316,7 @@ MkextDecompress (
 }
 
 RETURN_STATUS
-MkextContextInit (
+MkextContextInit ( // TODO: Need Free function.
   IN OUT  MKEXT_CONTEXT      *Context,
   IN OUT  UINT8              *Mkext,
   IN      UINT32             MkextSize,
@@ -358,8 +358,6 @@ MkextContextInit (
     return RETURN_INVALID_PARAMETER;
   }
 
-
-
   ZeroMem (Context, sizeof (MKEXT_CONTEXT));
   Context->Mkext          = Mkext;
   Context->MkextHeader    = (MKEXT_HEADER_ANY*)Mkext;
@@ -380,6 +378,11 @@ MkextContextInit (
   //
   Context->MkextVersion = SwapBytes32 (Context->MkextHeader->Common.Version);
   DEBUG ((DEBUG_INFO, "Mkext version 0x%X\n", Context->MkextVersion));
+
+
+  //
+  // Mkext v1.
+  //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
     
     //
@@ -402,13 +405,15 @@ MkextContextInit (
       }
     }
 
-    Context->AvailableKextSlots = (StartingOffset - (sizeof (MKEXT_V1_HEADER) + (sizeof (MKEXT_V1_KEXT) * Context->NumKexts))) / sizeof (MKEXT_V1_KEXT);
-    DEBUG ((DEBUG_INFO, "Available kext slots %u\n", Context->AvailableKextSlots));
+    Context->NumMaxKexts = (StartingOffset - (sizeof (MKEXT_V1_HEADER) + (sizeof (MKEXT_V1_KEXT) * Context->NumKexts))) / sizeof (MKEXT_V1_KEXT) + Context->NumKexts;
+    DEBUG ((DEBUG_INFO, "max kext slots %u\n", Context->NumMaxKexts));
     DEBUG ((DEBUG_INFO, "start offset 0x%X\n", StartingOffset));
 
-    //return RETURN_UNSUPPORTED; // TODO
     return RETURN_SUCCESS;
     
+  //
+  // Mkext v2.
+  //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
     Context->MkextInfoOffset = SwapBytes32 (Context->MkextHeader->V2.PlistOffset);
     PlistCompressedSize = SwapBytes32 (Context->MkextHeader->V2.PlistCompressedSize);
@@ -528,29 +533,34 @@ MkextInjectKext (
   ASSERT (InfoPlistSize > 0);
 
   //
-  // Check version.
+  // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
     DEBUG ((DEBUG_INFO, "Adding kext %u\n", Context->NumKexts));
+    if (Context->NumKexts >= Context->NumMaxKexts) {
+      return EFI_OUT_OF_RESOURCES;
+    }
 
-    // Copy plist.
+    //
+    // Place plist at current end of mkext.
+    //
     Offset = Context->MkextSize;
     CopyMem (&Context->Mkext[Offset], InfoPlist, InfoPlistSize);
-    Context->MkextSize += InfoPlistSize;
+    if (OcOverflowAddU32 (Context->MkextSize, InfoPlistSize, &Context->MkextSize)) {
+      return RETURN_INVALID_PARAMETER;
+    }
 
     Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.Offset = SwapBytes32 (Offset);
     Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.CompressedSize = 0;
     Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.FullSize = SwapBytes32 (InfoPlistSize);
-    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.ModifiedSeconds = 0;
-
+    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.ModifiedSeconds = 0; // TODO: what value?
 
     //
     // Copy executable to mkext.
     //
     if (Executable != NULL) {
       ASSERT (ExecutableSize > 0);
-      Offset = Context->MkextSize;
-
+  
       //
       // Parse kext binary.
       //
@@ -559,21 +569,27 @@ MkextInjectKext (
       }
 
       //
-      // Copy binary to mkext.
+      // Place binary after associated plist.
       //
+      Offset = Context->MkextSize;
       CopyMem (&Context->Mkext[Offset], Executable, ExecutableSize);
+      if (OcOverflowAddU32 (Context->MkextSize, ExecutableSize, &Context->MkextSize)) {
+        return RETURN_INVALID_PARAMETER;
+      }
 
-      Context->MkextSize += ExecutableSize;
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.Offset = SwapBytes32 (Offset);
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.CompressedSize = 0;
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.FullSize = SwapBytes32 (ExecutableSize);
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.ModifiedSeconds = 0;
     }
 
-    Context->NumKexts++;
+    Context->NumKexts++; // TODO: account for overflow; is that even possible?
     return RETURN_SUCCESS;
-    //return RETURN_UNSUPPORTED;
 
+
+  //
+  // Mkext v2.
+  //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
     //
     // Copy executable to mkext.
@@ -679,10 +695,10 @@ MkextInjectKext (
       DEBUG ((DEBUG_INFO, "ERROR INJECTING\n"));
       return RETURN_OUT_OF_RESOURCES;
     }
-  } else {
-    return RETURN_UNSUPPORTED;
-  }
-  return 0;
+    return RETURN_SUCCESS;
+  } 
+
+  return RETURN_UNSUPPORTED;
 }
 
 RETURN_STATUS
@@ -694,15 +710,18 @@ MkextInjectComplete (
   UINT32      ExportedInfoSize;
 
   //
-  // Check version.
+  // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
     Context->MkextHeader->Common.NumKexts = SwapBytes32 (Context->NumKexts);
     Context->MkextHeader->Common.Length = SwapBytes32 (Context->MkextSize);
-    Context->MkextHeader->Common.Adler32 = SwapBytes32 (Adler32 (&Context->Mkext[16], Context->MkextSize - 16));
+    Context->MkextHeader->Common.Adler32 = SwapBytes32 (Adler32 (&Context->Mkext[OFFSET_OF (MKEXT_CORE_HEADER, Version)],
+      Context->MkextSize - OFFSET_OF (MKEXT_CORE_HEADER, Version))); // TODO: does this need checks?
     return RETURN_SUCCESS;
-    //return RETURN_UNSUPPORTED;
 
+  //
+  // Mkext v2.
+  //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
     ExportedInfo = XmlDocumentExport (Context->MkextInfoDocument, &ExportedInfoSize, 0);
     if (ExportedInfo == NULL) {

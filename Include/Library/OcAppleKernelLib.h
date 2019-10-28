@@ -229,12 +229,14 @@ typedef struct {
   //
   UINT32                    MkextVersion;
 
+  //
+  // Current number of kexts.
+  //
   UINT32                    NumKexts;
-
   //
-  // Available kext slots (v1 only).
+  // Max kexts for allocation.
   //
-  UINT32                    AvailableKextSlots;
+  UINT32                    NumMaxKexts;
 
   //
   // Offset of mkext plist.
