@@ -75,7 +75,7 @@ ParseFatArchitectures (
     if (SwapBytes) {
       CpuType = SwapBytes32 (CpuType);
     }
-    DEBUG ((DEBUG_INFO, "Got CPU type of 0x%X at index %u\n", CpuType, Index));
+    //DEBUG ((DEBUG_INFO, "Got CPU type of 0x%X at index %u\n", CpuType, Index));
 
     if (CpuType == MachCpuTypeX86 || CpuType == MachCpuTypeX8664) {
       Offset = FatHeader->FatArch[Index].Offset;
@@ -102,7 +102,7 @@ ParseFatArchitectures (
         *BufferOffset64 = Offset;
         *BufferSize64 = Size;
       }
-      DEBUG ((DEBUG_INFO, "Offset 0x%X, Size %u\n", Offset, Size));
+      //DEBUG ((DEBUG_INFO, "Offset 0x%X, Size %u\n", Offset, Size));
     }
   }
 
@@ -152,8 +152,8 @@ CreateFatHeader (
   FatHeader->FatArch[1].Size        = SwapBytes32 (Size64);
   FatHeader->FatArch[1].Alignment = 0;
 
-  DEBUG ((DEBUG_INFO, "AllocSize 32: %u 64: %u\n", AllocatedSize32, AllocatedSize64));
-  DEBUG ((DEBUG_INFO, "fat size 32: %u, 64: %u\n", Size32, Size64));
+ // DEBUG ((DEBUG_INFO, "AllocSize 32: %u 64: %u\n", AllocatedSize32, AllocatedSize64));
+ // DEBUG ((DEBUG_INFO, "fat size 32: %u, 64: %u\n", Size32, Size64));
   return FatHeaderSize + AllocatedSize32 + AllocatedSize64;
 }
 
@@ -357,23 +357,6 @@ GetMkextAllocatedSize (
 
   return TRUE;
 }
-
-/*STATIC
-RETURN_STATUS
-ReadAppleMkextImage (
-  IN     UINT8              *Mkext,
-  IN     UINT32             MkextSize,
-  IN     UINT32             NumReservedKexts,
-  IN OUT UINT8              *OutBuffer,
-  IN     UINT32             OutBufferSize
-  )
-{
-  RETURN_STATUS       Status;
-
-  return MkextDecompress (Mkext, MkextSize, NumReservedKexts, OutBuffer, OutBufferSize);
-
- // return RETURN_SUCCESS;
-}*/
 
 STATIC
 RETURN_STATUS
@@ -641,14 +624,14 @@ ReadAppleMkext (
   if (!GetMkextAllocatedSize (File, OffsetA, SizeA, NumReservedKexts, ReservedSize, &MkextA, AllocatedSizeA)) {
     return RETURN_INVALID_PARAMETER;
   }
-  DEBUG ((DEBUG_INFO, "A Size %u, uncomp %u\n", SizeA, *AllocatedSizeA));
+  //DEBUG ((DEBUG_INFO, "A Size %u, uncomp %u\n", SizeA, *AllocatedSizeA));
 
   if (*IsFat) {
     if (!GetMkextAllocatedSize (File, OffsetB, SizeB, NumReservedKexts, ReservedSize, &MkextB, AllocatedSizeB)) {
       return RETURN_INVALID_PARAMETER;
     }
 
-    DEBUG ((DEBUG_INFO, "B Size %u, uncomp %u\n", SizeB, *AllocatedSizeB));
+  //  DEBUG ((DEBUG_INFO, "B Size %u, uncomp %u\n", SizeB, *AllocatedSizeB));
     
     if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
       //|| OcOverflowAddU32 (SizeActualB, ReservedSize, AllocatedSizeB)
@@ -686,16 +669,12 @@ ReadAppleMkext (
     //
     // Read both mkexts.
     //
-    //Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA);
-   // Status = ReadAppleMkextImage (File, OffsetA, &((*Buffer)[OffsetFatA]), SizeA, *AllocatedSizeA);
-   Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA, &SizeActualA);
+    Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA, &SizeActualA);
     if (RETURN_ERROR (Status)) {
       FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
     }
-    //Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB);
-  //  Status = ReadAppleMkextImage (File, OffsetB, &((*Buffer)[OffsetFatB]), SizeB, *AllocatedSizeB);
-  Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB, &SizeActualB);
+    Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB, &SizeActualB);
     if (RETURN_ERROR (Status)) {
       FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
@@ -709,9 +688,7 @@ ReadAppleMkext (
     //
     // Read single mkext.
     //
-   // *BufferSize = SizeA;
     Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, *Buffer, *AllocatedSizeA, BufferSize);
-   // Status = ReadAppleMkextImage (File, OffsetA, *Buffer, SizeA, *AllocatedSizeA);
     if (RETURN_ERROR (Status)) {
       FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 

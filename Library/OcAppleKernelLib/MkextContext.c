@@ -854,7 +854,7 @@ MkextInjectKext (
       // Parse kext binary.
       //
       if (!ParseKextBinary (&Executable, &ExecutableSize, Context->CpuType)) {
-        //return RETURN_INVALID_PARAMETER;
+        return RETURN_INVALID_PARAMETER;
       }
 
       //
