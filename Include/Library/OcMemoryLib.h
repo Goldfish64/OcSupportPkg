@@ -99,7 +99,7 @@ GetCurrentMemoryMap (
   @param[out]    DescriptorSize     Resulting memory map descriptor size in bytes.
   @param[out]    DescriptorVersion  Memory map descriptor version.
   @param[in]     GetMemoryMap       Custom GetMemoryMap implementation to use, optional.
-  @param[in,out] TopMemory          Base top address for AllocatePagesFromTop allocation.
+  @param[in,out] TopMemory          Base top address for AllocatePagesFromTop allocation, number of pages after return.
 
   @retval EFI_SUCCESS on success.
 **/
@@ -111,7 +111,7 @@ GetCurrentMemoryMapAlloc (
      OUT UINTN                  *DescriptorSize,
      OUT UINT32                 *DescriptorVersion,
   IN     EFI_GET_MEMORY_MAP     GetMemoryMap  OPTIONAL,
-  IN OUT UINTN                  *TopMemory  OPTIONAL
+  IN OUT EFI_PHYSICAL_ADDRESS   *TopMemory  OPTIONAL
   );
 
 /**
@@ -192,7 +192,7 @@ AllocatePagesFromTop (
 
   @retval Number of runtime pages.
 **/
-UINTN
+UINT64
 CountRuntimePages (
   IN  UINTN                  MemoryMapSize,
   IN  EFI_MEMORY_DESCRIPTOR  *MemoryMap,
@@ -308,7 +308,7 @@ VmMapVirtualPages (
   IN OUT OC_VMEM_CONTEXT                 *Context,
   IN OUT PAGE_MAP_AND_DIRECTORY_POINTER  *PageTable  OPTIONAL,
   IN     EFI_VIRTUAL_ADDRESS             VirtualAddr,
-  IN     UINTN                           NumPages,
+  IN     UINT64                          NumPages,
   IN     EFI_PHYSICAL_ADDRESS            PhysicalAddr
   );
 

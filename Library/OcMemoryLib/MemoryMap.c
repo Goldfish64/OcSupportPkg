@@ -100,10 +100,11 @@ GetCurrentMemoryMapAlloc (
      OUT UINTN                  *DescriptorSize,
      OUT UINT32                 *DescriptorVersion,
   IN     EFI_GET_MEMORY_MAP     GetMemoryMap  OPTIONAL,
-  IN OUT UINTN                  *TopMemory  OPTIONAL
+  IN OUT EFI_PHYSICAL_ADDRESS   *TopMemory  OPTIONAL
   )
 {
-  EFI_STATUS  Status;
+  EFI_STATUS           Status;
+  EFI_PHYSICAL_ADDRESS MemoryMapAlloc;
 
   *MemoryMapSize = 0;
   *MemoryMap     = NULL;
@@ -136,13 +137,13 @@ GetCurrentMemoryMapAlloc (
     // This may be needed, because the pool memory may collide with the kernel.
     //
     if (TopMemory != NULL) {
-      *MemoryMap  = (EFI_MEMORY_DESCRIPTOR *)(UINTN) BASE_4GB;
-      *TopMemory  = EFI_SIZE_TO_PAGES (*MemoryMapSize);
+      MemoryMapAlloc = *TopMemory;
+      *TopMemory     = EFI_SIZE_TO_PAGES (*MemoryMapSize);
 
       Status = AllocatePagesFromTop (
         EfiBootServicesData,
-        *TopMemory,
-        (EFI_PHYSICAL_ADDRESS *)MemoryMap,
+        (UINTN) *TopMemory,
+        &MemoryMapAlloc,
         GetMemoryMap,
         NULL
         );
@@ -152,6 +153,8 @@ GetCurrentMemoryMapAlloc (
         *MemoryMap = NULL;
         return Status;
       }
+
+      *MemoryMap = (EFI_MEMORY_DESCRIPTOR *)(UINTN) MemoryMapAlloc;
     } else {
       *MemoryMap = AllocatePool (*MemoryMapSize);
       if (*MemoryMap == NULL) {
@@ -172,7 +175,7 @@ GetCurrentMemoryMapAlloc (
       if (TopMemory != NULL) {
         gBS->FreePages (
           (EFI_PHYSICAL_ADDRESS) *MemoryMap,
-          *TopMemory
+          (UINTN) *TopMemory
           );
       } else {
         FreePool (*MemoryMap);
@@ -307,11 +310,11 @@ AllocatePagesFromTop (
       //
       // Free block found
       //
-      if (Desc->PhysicalStart + EFI_PAGES_TO_SIZE ((UINTN) Desc->NumberOfPages) <= *Memory) {
+      if (Desc->PhysicalStart + EFI_PAGES_TO_SIZE (Desc->NumberOfPages) <= *Memory) {
         //
         // The whole block is under Memory: allocate from the top of the block
         //
-        *Memory = Desc->PhysicalStart + EFI_PAGES_TO_SIZE ((UINTN) Desc->NumberOfPages - Pages);
+        *Memory = Desc->PhysicalStart + EFI_PAGES_TO_SIZE (Desc->NumberOfPages - Pages);
       } else {
         //
         // The block contains enough pages under Memory, but spans above it - allocate below Memory
@@ -342,7 +345,7 @@ AllocatePagesFromTop (
   return Status;
 }
 
-UINTN
+UINT64
 CountRuntimePages (
   IN  UINTN                  MemoryMapSize,
   IN  EFI_MEMORY_DESCRIPTOR  *MemoryMap,
@@ -351,7 +354,7 @@ CountRuntimePages (
   )
 {
   UINTN                  DescNum;
-  UINTN                  PageNum;
+  UINT64                 PageNum;
   UINTN                  NumEntries;
   UINTN                  Index;
   EFI_MEMORY_DESCRIPTOR  *Desc;

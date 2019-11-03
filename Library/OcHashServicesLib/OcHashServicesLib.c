@@ -65,7 +65,7 @@ HSHash (
   HS_PRIVATE_DATA  *PrivateData;
   HS_CONTEXT_DATA  CtxCopy;
 
-  if (!This || !HashAlgorithm || !Message || !Hash || !MessageSize) {
+  if (!This || !HashAlgorithm || !Message || !Hash || !MessageSize || MessageSize > MAX_UINTN) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -76,7 +76,7 @@ HSHash (
       Md5Init (&PrivateData->Ctx.Md5);
     }
 
-    Md5Update (&PrivateData->Ctx.Md5, Message, MessageSize);
+    Md5Update (&PrivateData->Ctx.Md5, Message, (UINTN)MessageSize);
     CopyMem (&CtxCopy, &PrivateData->Ctx, sizeof (PrivateData->Ctx));
     Md5Final (&CtxCopy.Md5, *Hash->Md5Hash);
     return EFI_SUCCESS;
@@ -85,7 +85,7 @@ HSHash (
       Sha1Init (&PrivateData->Ctx.Sha1);
     }
 
-    Sha1Update (&PrivateData->Ctx.Sha1, Message, MessageSize);
+    Sha1Update (&PrivateData->Ctx.Sha1, Message, (UINTN)MessageSize);
     CopyMem (&CtxCopy, &PrivateData->Ctx, sizeof (PrivateData->Ctx));
     Sha1Final (&CtxCopy.Sha1, *Hash->Sha1Hash);
     return EFI_SUCCESS;
@@ -94,7 +94,7 @@ HSHash (
       Sha256Init (&PrivateData->Ctx.Sha256);
     }
 
-    Sha256Update (&PrivateData->Ctx.Sha256, Message, MessageSize);
+    Sha256Update (&PrivateData->Ctx.Sha256, Message, (UINTN)MessageSize);
     CopyMem (&CtxCopy, &PrivateData->Ctx, sizeof (PrivateData->Ctx));
     Sha256Final (&CtxCopy.Sha256, *Hash->Sha256Hash);
     return EFI_SUCCESS;

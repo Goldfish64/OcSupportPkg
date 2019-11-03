@@ -49,7 +49,7 @@ STATIC
 VOID
 GetSlideRangeForValue (
   IN  SLIDE_SUPPORT_STATE  *SlideSupport,
-  IN  UINTN                Slide,
+  IN  UINT8                Slide,
   OUT UINTN                *StartAddr,
   OUT UINTN                *EndAddr
   )
@@ -101,7 +101,7 @@ BOOLEAN
 ShouldUseCustomSlideOffsetDecision (
   IN OUT SLIDE_SUPPORT_STATE  *SlideSupport,
   IN     UINT8                FallbackSlide,
-  IN     UINTN                MaxAvailableSize
+  IN     UINT64               MaxAvailableSize
   )
 {
   UINTN  Index;
@@ -126,7 +126,7 @@ ShouldUseCustomSlideOffsetDecision (
   if (SlideSupport->ValidSlideCount == 0) {
     DEBUG ((
       DEBUG_INFO,
-      "OCABC: No slide values are usable! Falling back to %u with 0x%08X bytes!\n",
+      "OCABC: No slide values are usable! Falling back to %u with 0x%08LX bytes!\n",
       (UINT32) FallbackSlide,
       MaxAvailableSize
       ));
@@ -222,7 +222,7 @@ ShouldUseCustomSlideOffset (
   IN     VOID                  *FilterMapContext  OPTIONAL
   )
 {
-  UINTN                  AllocatedMapPages;
+  EFI_PHYSICAL_ADDRESS   AllocatedMapPages;
   UINTN                  MemoryMapSize;
   EFI_MEMORY_DESCRIPTOR  *MemoryMap;
   EFI_MEMORY_DESCRIPTOR  *Desc;
@@ -233,13 +233,13 @@ ShouldUseCustomSlideOffset (
   UINTN                  Index;
   UINTN                  Slide;
   UINTN                  NumEntries;
-  UINTN                  MaxAvailableSize;
+  UINT64                 MaxAvailableSize;
   UINT8                  FallbackSlide;
   BOOLEAN                Supported;
   UINTN                  StartAddr;
   UINTN                  EndAddr;
-  UINTN                  DescEndAddr;
-  UINTN                  AvailableSize;
+  EFI_PHYSICAL_ADDRESS   DescEndAddr;
+  UINT64                 AvailableSize;
 
   MaxAvailableSize = 0;
   FallbackSlide    = 0;
@@ -270,7 +270,7 @@ ShouldUseCustomSlideOffset (
   }
 
   SlideSupport->HasSandyOrIvy       = OcIsSandyOrIvy ();
-  SlideSupport->EstimatedKernelArea = EFI_PAGES_TO_SIZE (
+  SlideSupport->EstimatedKernelArea = (UINTN)EFI_PAGES_TO_SIZE (
     CountRuntimePages (MemoryMapSize, MemoryMap, DescriptorSize, NULL)
     ) + ESTIMATED_KERNEL_SIZE;
 
@@ -291,7 +291,7 @@ ShouldUseCustomSlideOffset (
 
     GetSlideRangeForValue (
       SlideSupport,
-      Slide,
+      (UINT8) Slide,
       &StartAddr,
       &EndAddr
       );
@@ -366,8 +366,8 @@ ShouldUseCustomSlideOffset (
   SlideSupport->HasMemoryMapAnalysis = TRUE;
 
   gBS->FreePages (
-    (EFI_PHYSICAL_ADDRESS) MemoryMap,
-    AllocatedMapPages
+    (EFI_PHYSICAL_ADDRESS)(UINTN) MemoryMap,
+    (UINTN) AllocatedMapPages
     );
 
   return ShouldUseCustomSlideOffsetDecision (

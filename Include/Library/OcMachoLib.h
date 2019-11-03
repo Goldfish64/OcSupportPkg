@@ -772,7 +772,7 @@ MachoExpandImage64 (
 
   @returns  Entry point or 0.
 **/
-UINTN
+UINT64
 MachoRuntimeGetEntryAddress (
   IN VOID  *Image
   );

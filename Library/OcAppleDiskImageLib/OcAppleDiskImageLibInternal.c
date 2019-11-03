@@ -68,12 +68,13 @@ BOOLEAN
 InternalSwapBlockData (
   IN OUT APPLE_DISK_IMAGE_BLOCK_DATA  *BlockData,
   IN     UINT32                       MaxSize,
-  IN     UINT64                       DataForkOffset,
-  IN     UINT64                       DataForkSize
+  IN     UINTN                        SectorCount,
+  IN     UINTN                        DataForkOffset,
+  IN     UINTN                        DataForkSize
   )
 {
   UINT32                 ChunksSize;
-  UINT64                 MaxOffset;
+  UINTN                  MaxOffset;
   BOOLEAN                Result;
   APPLE_DISK_IMAGE_CHUNK *Chunk;
   UINT32                 Index;
@@ -116,7 +117,8 @@ InternalSwapBlockData (
              BlockData->SectorCount,
              &BlockSectorTop
              );
-  if (Result) {
+  if (Result || BlockSectorTop > SectorCount) {
+    DEBUG ((DEBUG_ERROR, "OCDMG: Block sectors exceed DMG sectors %lu %lu\n", BlockSectorTop, SectorCount));
     return FALSE;
   }
 
@@ -162,8 +164,9 @@ BOOLEAN
 InternalParsePlist (
   IN  CHAR8                        *Plist,
   IN  UINT32                       PlistSize,
-  IN  UINT64                       DataForkOffset,
-  IN  UINT64                       DataForkSize,
+  IN  UINTN                        SectorCount,
+  IN  UINTN                        DataForkOffset,
+  IN  UINTN                        DataForkSize,
   OUT UINT32                       *BlockCount,
   OUT APPLE_DISK_IMAGE_BLOCK_DATA  ***Blocks
   )
@@ -279,15 +282,21 @@ InternalParsePlist (
                &BlockDictChildDataSize
                );
     if (!Result) {
+      FreePool (Block);
       goto DONE_ERROR;
     }
 
-    InternalSwapBlockData (
-      Block,
-      BlockDictChildDataSize,
-      DataForkOffset,
-      DataForkSize
-      );
+    Result = InternalSwapBlockData (
+               Block,
+               BlockDictChildDataSize,
+               SectorCount,
+               DataForkOffset,
+               DataForkSize
+               );
+    if (!Result) {
+      FreePool (Block);
+      goto DONE_ERROR;
+    }
   }
 
   *BlockCount = NumDmgBlocks;
@@ -313,7 +322,7 @@ DONE_ERROR:
 BOOLEAN
 InternalGetBlockChunk (
   IN  OC_APPLE_DISK_IMAGE_CONTEXT  *Context,
-  IN  UINT64                       Lba,
+  IN  UINTN                        Lba,
   OUT APPLE_DISK_IMAGE_BLOCK_DATA  **Data,
   OUT APPLE_DISK_IMAGE_CHUNK       **Chunk
   )
