@@ -185,6 +185,12 @@ XmlNodeContent (
   XML_NODE  *Node
   );
 
+VOID
+XmlNodeChangeContent (
+  XML_NODE     *Node,
+  CONST CHAR8  *Content
+  );
+
 //
 // @return Number of child nodes.
 //

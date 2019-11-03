@@ -228,6 +228,10 @@ typedef struct {
   // Version.
   //
   UINT32                    MkextVersion;
+  //
+  // CPU type.
+  //
+  MACH_CPU_TYPE             CpuType;
 
   //
   // Current number of kexts.
@@ -246,7 +250,7 @@ typedef struct {
   // Copy of mkext plist used for XML_DOCUMENT.
   // Freed upon context destruction.
   //
-  CHAR8                    *MkextInfo;
+  UINT8                    *MkextInfo;
   //
   // Parsed instance of mkext plist. New entries are added here.
   //

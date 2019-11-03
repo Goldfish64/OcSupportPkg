@@ -641,12 +641,14 @@ ReadAppleMkext (
   if (!GetMkextAllocatedSize (File, OffsetA, SizeA, NumReservedKexts, ReservedSize, &MkextA, AllocatedSizeA)) {
     return RETURN_INVALID_PARAMETER;
   }
-  DEBUG ((DEBUG_INFO, "Size %u, uncomp %u\n", SizeA, AllocatedSizeA));
+  DEBUG ((DEBUG_INFO, "A Size %u, uncomp %u\n", SizeA, *AllocatedSizeA));
 
   if (*IsFat) {
     if (!GetMkextAllocatedSize (File, OffsetB, SizeB, NumReservedKexts, ReservedSize, &MkextB, AllocatedSizeB)) {
       return RETURN_INVALID_PARAMETER;
     }
+
+    DEBUG ((DEBUG_INFO, "B Size %u, uncomp %u\n", SizeB, *AllocatedSizeB));
     
     if (OcOverflowMulAddU32 (KERNEL_FAT_ARCH_COUNT, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &FatHeaderSize)
       //|| OcOverflowAddU32 (SizeActualB, ReservedSize, AllocatedSizeB)
@@ -669,9 +671,9 @@ ReadAppleMkext (
     *BufferSize = CreateFatHeader (
       *Buffer,
       AllocatedTotalSize,
-      SizeActualA,
+      SizeA,
       *AllocatedSizeA,
-      SizeActualB,
+      SizeB,
       *AllocatedSizeB,
       &OffsetFatA,
       &OffsetFatB
@@ -686,15 +688,21 @@ ReadAppleMkext (
     //
     //Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA);
    // Status = ReadAppleMkextImage (File, OffsetA, &((*Buffer)[OffsetFatA]), SizeA, *AllocatedSizeA);
+   Status = MkextDecompress (MkextA, SizeA, NumReservedKexts, &((*Buffer)[OffsetFatA]), *AllocatedSizeA, &SizeActualA);
     if (RETURN_ERROR (Status)) {
       FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
     }
     //Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB);
   //  Status = ReadAppleMkextImage (File, OffsetB, &((*Buffer)[OffsetFatB]), SizeB, *AllocatedSizeB);
+  Status = MkextDecompress (MkextB, SizeB, NumReservedKexts, &((*Buffer)[OffsetFatB]), *AllocatedSizeB, &SizeActualB);
     if (RETURN_ERROR (Status)) {
       FreePool (*Buffer);
       return RETURN_INVALID_PARAMETER; 
+    }
+
+    if (!UpdateFatHeader (*Buffer, *BufferSize, SizeActualA, SizeActualB)) {
+      return EFI_INVALID_PARAMETER;
     }
   
   } else {

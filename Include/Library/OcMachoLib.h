@@ -43,6 +43,25 @@ typedef struct {
   MACH_RELOCATION_INFO  *ExternRelocations;
 } OC_MACHO_CONTEXT;
 
+BOOLEAN
+MachoFilterFatArchitectureByType (
+  IN OUT UINT8         **FileData,
+  IN OUT UINT32        *FileSize,
+  IN     MACH_CPU_TYPE CpuType
+  );
+
+BOOLEAN
+MachoFilterFatArchitecture32 (
+  IN OUT UINT8         **FileData,
+  IN OUT UINT32        *FileSize
+  );
+
+BOOLEAN
+MachoFilterFatArchitecture64 (
+  IN OUT UINT8         **FileData,
+  IN OUT UINT32        *FileSize
+  );
+
 /**
   Initializes a Mach-O Context.
 
