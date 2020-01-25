@@ -194,25 +194,76 @@ typedef struct {
   UINT32       Limit;
 } PATCHER_GENERIC_PATCH;
 
+//
+// Kernel image descriptor.
+//
+typedef struct {
+  //
+  // Offset into buffer.
+  //
+  UINT32  Offset;
+  //
+  // Current image size.
+  //
+  UINT32  Size;
+  //
+  // Allocated size for image.
+  //
+  UINT32  AllocatedSize;
+} KERNEL_IMAGE_CONTEXT;
+
 /**
-  Read Apple kernel for target architecture (possibly decompressing)
-  into pool allocated buffer.
+  Read Apple kernels (possibly decompressing) into pool allocated buffer.
+  A universal binary is generated if necessary.
 
   @param[in]      File           File handle instance.
-  @param[in, out] Kernel         Resulting non-fat kernel buffer from pool.
-  @param[out]     KernelSize     Actual kernel size.
-  @param[out]     AllocatedSize  Allocated kernel size (AllocatedSize >= KernelSize).
   @param[in]      ReservedSize   Allocated extra size for added kernel extensions.
+  @param[out]     Buffer         Resulting kernel buffer from pool.
+  @param[out]     BufferSize     Total size of kernel buffer.
+  @param[out]     Kernel32       Resulting 32-bit Intel kernel image descriptor, if present.
+  @param[out]     Kernel64       Resulting 64-bit Intel kernel image descriptor, if present.
 
   @return  RETURN_SUCCESS on success.
 **/
 RETURN_STATUS
 ReadAppleKernel (
-  IN     EFI_FILE_PROTOCOL  *File,
-  IN OUT UINT8              **Kernel,
-     OUT UINT32             *KernelSize,
-     OUT UINT32             *AllocatedSize,
-  IN     UINT32             ReservedSize
+  IN     EFI_FILE_PROTOCOL    *File,
+  IN     UINT32               ReservedSize,
+     OUT UINT8                **Buffer,
+     OUT UINT32               *BufferSize,
+     OUT KERNEL_IMAGE_CONTEXT *Kernel32,
+     OUT KERNEL_IMAGE_CONTEXT *Kernel64
+  );
+
+/**
+  Read Apple mkext images (possibly decompressing) into pool allocated buffer.
+  A universal binary is generated if necessary.
+
+  @param[in]      File           File handle instance.
+  @param[in]      ReservedSize   Allocated extra size for added kernel extensions.
+  @param[out]     Buffer         Resulting mkext buffer from pool.
+  @param[out]     BufferSize     Total size of kernel buffer.
+  @param[out]     Mkext32        Resulting 32-bit Intel mkext image descriptor, if present.
+  @param[out]     Mkext64        Resulting 64-bit Intel mkext image descriptor, if present.
+
+  @return  RETURN_SUCCESS on success.
+**/
+RETURN_STATUS
+ReadAppleMkext (
+  IN     EFI_FILE_PROTOCOL    *File,
+  IN     UINT32               ReservedSize,
+     OUT UINT8                **Buffer,
+     OUT UINT32               *BufferSize,
+     OUT KERNEL_IMAGE_CONTEXT *Mkext32,
+     OUT KERNEL_IMAGE_CONTEXT *Mkext64
+  );
+
+VOID
+UpdateAppleKernelFat (
+  IN UINT8                *Buffer,
+  IN UINT32               BufferSize,
+  IN KERNEL_IMAGE_CONTEXT *Image32,
+  IN KERNEL_IMAGE_CONTEXT *Image64
   );
 
 /**
