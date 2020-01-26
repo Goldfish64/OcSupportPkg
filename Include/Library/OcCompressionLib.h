@@ -117,4 +117,18 @@ DecompressZLIB (
   IN  UINTN        SrcLen
   );
 
+/**
+  Calculates Adler32 checksum.
+
+  @param[in]   Buffer         Source buffer.
+  @param[in]   BufferLen      Source buffer size.
+
+  @return  Checksum on success otherwise 0.
+**/
+UINT32
+Adler32 (
+  IN CONST UINT8  *Buffer,
+  IN UINT32       BufferLen
+);
+
 #endif // OC_COMPRESSION_LIB_H

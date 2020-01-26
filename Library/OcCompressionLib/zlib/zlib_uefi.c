@@ -78,4 +78,13 @@ DecompressZLIB (
   return 0;
 }
 
+UINT32
+Adler32 (
+  IN CONST UINT8  *Buffer,
+  IN UINT32       BufferLen
+)
+{
+  return adler32 (1, Buffer, BufferLen);
+}
+
 #endif // OC_USE_SSH_ZLIB
