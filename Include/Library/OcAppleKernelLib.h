@@ -15,6 +15,8 @@
 #ifndef OC_APPLE_KERNEL_LIB_H
 #define OC_APPLE_KERNEL_LIB_H
 
+#include <IndustryStandard/AppleMkext.h>
+
 #include <Library/OcCpuLib.h>
 #include <Library/OcMachoLib.h>
 #include <Library/OcXmlLib.h>
@@ -43,8 +45,14 @@
 #define INFO_BUNDLE_VERSION_KEY                   "CFBundleVersion"
 #define INFO_BUNDLE_COMPATIBLE_VERSION_KEY        "OSBundleCompatibleVersion"
 
+#define MKEXT_INFO_DICTIONARIES_KEY               "_MKEXTInfoDictionaries"
+#define MKEXT_BUNDLE_PATH_KEY                     "_MKEXTBundlePath"
+#define MKEXT_EXECUTABLE_RELATIVE_PATH_KEY        "_MKEXTExecutableRelativePath"
+#define MKEXT_EXECUTABLE_KEY                      "_MKEXTExecutable"
+
 
 #define PRELINK_INFO_INTEGER_ATTRIBUTES           "size=\"64\""
+#define MKEXT_INFO_INTEGER_ATTRIBUTES             "size=\"32\""
 
 //
 // Failsafe default for plist reserve allocation.
@@ -195,6 +203,64 @@ typedef struct {
 } PATCHER_GENERIC_PATCH;
 
 //
+// Mkext context.
+//
+typedef struct {
+  //
+  // Current version of mkext. It takes a reference of user-allocated
+  // memory block from pool, and grows if needed.
+  //
+  UINT8                    *Mkext;
+  //
+  // Exportable mkext size, i.e. the payload size. Also references user field.
+  //
+  UINT32                   MkextSize;
+  //
+  // Currently allocated mkext size, used for reduced rellocations.
+  //
+  UINT32                   MkextAllocSize;
+  //
+  // Mkext header.
+  //
+  MKEXT_HEADER_ANY         *MkextHeader;
+  //
+  // Version.
+  //
+  UINT32                    MkextVersion;
+  //
+  // CPU type.
+  //
+  MACH_CPU_TYPE             CpuType;
+
+  //
+  // Current number of kexts.
+  //
+  UINT32                    NumKexts;
+  //
+  // Max kexts for allocation.
+  //
+  UINT32                    NumMaxKexts;
+
+  //
+  // Offset of mkext plist.
+  //
+  UINT32                    MkextInfoOffset;
+  //
+  // Copy of mkext plist used for XML_DOCUMENT.
+  // Freed upon context destruction.
+  //
+  UINT8                    *MkextInfo;
+  //
+  // Parsed instance of mkext plist. New entries are added here.
+  //
+  XML_DOCUMENT             *MkextInfoDocument;
+  //
+  // Array of kexts.
+  //
+  XML_NODE                 *MkextKexts;
+} MKEXT_CONTEXT;
+
+//
 // Kernel image descriptor.
 //
 typedef struct {
@@ -216,12 +282,12 @@ typedef struct {
   Read Apple kernels (possibly decompressing) into pool allocated buffer.
   A universal binary is generated if necessary.
 
-  @param[in]      File           File handle instance.
-  @param[in]      ReservedSize   Allocated extra size for added kernel extensions.
-  @param[out]     Buffer         Resulting kernel buffer from pool.
-  @param[out]     BufferSize     Total size of kernel buffer.
-  @param[out]     Kernel32       Resulting 32-bit Intel kernel image descriptor, if present.
-  @param[out]     Kernel64       Resulting 64-bit Intel kernel image descriptor, if present.
+  @param[in]      File              File handle instance.
+  @param[in]      ReservedSize      Allocated extra size for added kernel extensions.
+  @param[out]     Buffer            Resulting kernel buffer from pool.
+  @param[out]     BufferSize        Total size of kernel buffer.
+  @param[out]     Kernel32          Resulting 32-bit Intel kernel image descriptor, if present.
+  @param[out]     Kernel64          Resulting 64-bit Intel kernel image descriptor, if present.
 
   @return  RETURN_SUCCESS on success.
 **/
@@ -239,12 +305,13 @@ ReadAppleKernel (
   Read Apple mkext images (possibly decompressing) into pool allocated buffer.
   A universal binary is generated if necessary.
 
-  @param[in]      File           File handle instance.
-  @param[in]      ReservedSize   Allocated extra size for added kernel extensions.
-  @param[out]     Buffer         Resulting mkext buffer from pool.
-  @param[out]     BufferSize     Total size of kernel buffer.
-  @param[out]     Mkext32        Resulting 32-bit Intel mkext image descriptor, if present.
-  @param[out]     Mkext64        Resulting 64-bit Intel mkext image descriptor, if present.
+  @param[in]      File              File handle instance.
+  @param[in]      ReservedSize      Allocated extra size for added kernel extensions.
+  @param[in]      NumReservedKexts  Number of added kernel extensions.
+  @param[out]     Buffer            Resulting mkext buffer from pool.
+  @param[out]     BufferSize        Total size of kernel buffer.
+  @param[out]     Mkext32           Resulting 32-bit Intel mkext image descriptor, if present.
+  @param[out]     Mkext64           Resulting 64-bit Intel mkext image descriptor, if present.
 
   @return  RETURN_SUCCESS on success.
 **/
@@ -252,6 +319,7 @@ RETURN_STATUS
 ReadAppleMkext (
   IN     EFI_FILE_PROTOCOL    *File,
   IN     UINT32               ReservedSize,
+  IN     UINT32               NumReservedKexts,
      OUT UINT8                **Buffer,
      OUT UINT32               *BufferSize,
      OUT KERNEL_IMAGE_CONTEXT *Mkext32,
@@ -623,6 +691,48 @@ PatchLapicKernelPanic (
 RETURN_STATUS
 PatchPowerStateTimeout (
   IN OUT PATCHER_CONTEXT   *Patcher
+  );
+
+UINT32
+MkextGetAllocatedSize (
+  IN     UINT8          *Buffer,
+  IN     UINT32         BufferSize,
+  IN     UINT32         ReservedSize,
+  IN     UINT32         NumReservedKexts,
+     OUT MACH_CPU_TYPE  *CpuType
+  );
+
+RETURN_STATUS
+MkextDecompress (
+  IN     UINT8    *Buffer,
+  IN     UINT32   BufferSize,
+  IN     UINT32   NumReservedKexts,
+  IN OUT UINT8    *OutBuffer,
+  IN     UINT32   OutBufferSize,
+  OUT    UINT32   *OutMkextSize
+  );
+
+RETURN_STATUS
+MkextContextInit (
+  IN OUT  MKEXT_CONTEXT      *Context,
+  IN OUT  UINT8              *Mkext,
+  IN      UINT32             MkextSize,
+  IN      UINT32             MkextAllocSize
+  );
+
+RETURN_STATUS
+MkextInjectKext (
+  IN OUT MKEXT_CONTEXT      *Context,
+  IN     CONST CHAR8        *BundlePath,
+  IN     CONST CHAR8        *InfoPlist,
+  IN     UINT32             InfoPlistSize,
+  IN     UINT8              *Executable OPTIONAL,
+  IN     UINT32             ExecutableSize OPTIONAL
+  );
+
+RETURN_STATUS
+MkextInjectComplete (
+  IN OUT MKEXT_CONTEXT      *Context
   );
 
 #endif // OC_APPLE_KERNEL_LIB_H

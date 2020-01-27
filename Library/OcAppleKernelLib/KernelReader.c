@@ -33,8 +33,6 @@
 #define KERNEL_FAT_ARCH_COUNT 2
 #define KERNEL_FAT_HEADER_SIZE ALIGN_VALUE (KERNEL_FAT_ARCH_COUNT * (sizeof (MACH_FAT_ARCH) + sizeof (MACH_FAT_HEADER)), sizeof (UINT64))
 
-#define KERNEL_IMAGE_TYPE_KERNEL  1
-#define KERNEL_IMAGE_TYPE_MKEXT   2
 
 RETURN_STATUS
 ParseFatArchitectures (
@@ -171,11 +169,11 @@ CreateFatHeader (
 
 STATIC
 RETURN_STATUS
-DecompressAppleMachKernel (
+DecompressAppleKernel (
   IN     EFI_FILE_PROTOCOL  *File,
   IN     UINT32             Offset,
   IN OUT UINT8              *Kernel,
-  IN     UINT32             KernelSize
+     OUT UINT32             *KernelSize
   )
 {
   RETURN_STATUS       Status;
@@ -232,32 +230,31 @@ DecompressAppleMachKernel (
   //
   (VOID) DecompressedHash;
 
+  *KernelSize = DecompressedSize;
   return RETURN_SUCCESS;
 }
 
 STATIC
 UINT32
-GetAppleMachKernelSize (
+GetAppleKernelAllocatedSize (
   IN EFI_FILE_PROTOCOL    *File,
   IN UINT32               Offset,
-  IN UINT32               KernelSize
+  IN UINT32               KernelSize,
+  IN UINT32               ReservedSize
   )
 {
   RETURN_STATUS         Status;
   UINT8                 *Buffer;
+  UINT32                BufferSize;
 
-  MACH_COMP_HEADER  *CompHeader;
-  UINT32            CompressedSize;
-  UINT32            DecompressedSize;
+  MACH_COMP_HEADER      *CompHeader;
+  UINT32                CompressedSize;
+  UINT32                DecompressedSize;
+  UINT32                AllocatedSize;
 
-  Buffer = AllocatePool (KERNEL_HEADER_SIZE);
-  if (Buffer == NULL) {
-    return 0;
-  }
-
-  Status = GetFileData (File, Offset, KERNEL_HEADER_SIZE, Buffer);
+  BufferSize = KERNEL_HEADER_SIZE;
+  Status = AllocateCopyFileData (File, Offset, &BufferSize, &Buffer);
   if (RETURN_ERROR (Status)) {
-    FreePool (Buffer);
     return 0;
   }
 
@@ -265,9 +262,11 @@ GetAppleMachKernelSize (
   CompressedSize   = SwapBytes32 (CompHeader->Compressed);
   DecompressedSize = SwapBytes32 (CompHeader->Decompressed);
 
-
   if (CompHeader->Signature != MACH_COMPRESSED_BINARY_INVERT_SIGNATURE) {
-    return KernelSize;
+    if (OcOverflowAddU32 (KernelSize, ReservedSize, &AllocatedSize)) {
+      return 0;
+    }
+    return AllocatedSize;
   }
 
   if (CompressedSize > OC_COMPRESSION_MAX_LENGTH
@@ -277,18 +276,21 @@ GetAppleMachKernelSize (
     DEBUG ((DEBUG_INFO, "Comp binary invalid comp %u or decomp %u\n", CompressedSize, DecompressedSize));
     return 0;
   }
-  
+
   FreePool (Buffer);
-  return DecompressedSize;
+  if (OcOverflowAddU32 (DecompressedSize, ReservedSize, &AllocatedSize)) {
+    return 0;
+  }
+  return AllocatedSize;
 }
 
 STATIC
 RETURN_STATUS
-ReadAppleMachKernel (
+ReadAppleKernelBinary (
   IN     EFI_FILE_PROTOCOL  *File,
   IN     UINT32             Offset,
   IN OUT UINT8              *Kernel,
-  IN     UINT32             KernelSize,
+  IN OUT UINT32             *KernelSize,
      OUT MACH_CPU_TYPE      *CpuType
   )
 {
@@ -306,7 +308,7 @@ ReadAppleMachKernel (
     //
     // Decompress and read kernel.
     //
-    Status = DecompressAppleMachKernel (File, Offset, Kernel, KernelSize);
+    Status = DecompressAppleKernel (File, Offset, Kernel, KernelSize);
     if (RETURN_ERROR (Status)) {
       return RETURN_INVALID_PARAMETER;
     }
@@ -314,7 +316,7 @@ ReadAppleMachKernel (
     //
     // Read uncompressed kernel.
     //
-    Status = GetFileData (File, Offset, KernelSize, Kernel);
+    Status = GetFileData (File, Offset, *KernelSize, Kernel);
     if (RETURN_ERROR (Status)) {
       return RETURN_INVALID_PARAMETER;
     }
@@ -327,10 +329,10 @@ ReadAppleMachKernel (
 
   if (*MagicPtr == MACH_HEADER_64_SIGNATURE) {
     *CpuType = MachCpuTypeX8664;
-    DEBUG ((DEBUG_INFO, "Read Intel 64-bit kernel of %u bytes from 0x%X\n", KernelSize, Offset));
+    DEBUG ((DEBUG_INFO, "Read Intel 64-bit kernel of %u bytes from 0x%X\n", *KernelSize, Offset));
   } else {
     *CpuType = MachCpuTypeI386;
-    DEBUG ((DEBUG_INFO, "Read Intel 32-bit kernel of %u bytes from 0x%X\n", KernelSize, Offset));
+    DEBUG ((DEBUG_INFO, "Read Intel 32-bit kernel of %u bytes from 0x%X\n", *KernelSize, Offset));
   }
 
   return RETURN_SUCCESS;
@@ -338,34 +340,38 @@ ReadAppleMachKernel (
 
 STATIC
 UINT32
-GetAppleMkextKernelSize (
-  IN EFI_FILE_PROTOCOL    *File,
-  IN UINT32               Offset,
-  IN UINT32               KernelSize
-  )
-{
-  return 0; // Stub.
-}
-
-STATIC
-RETURN_STATUS
-ReadAppleMkextKernel (
+GetAppleMkextAllocatedSize (
   IN     EFI_FILE_PROTOCOL  *File,
   IN     UINT32             Offset,
-  IN OUT UINT8              *Kernel,
-  IN     UINT32             KernelSize,
+  IN     UINT32             MkextSize,
+  IN     UINT32             ReservedSize,
+  IN     UINT32             NumReservedKexts,
+     OUT UINT8              **MkextBuffer,
      OUT MACH_CPU_TYPE      *CpuType
   )
 {
-  return 0; // Stub.
+  RETURN_STATUS     Status;
+  UINT32            MkextAllocatedSize;
+
+  Status = AllocateCopyFileData (File, Offset, &MkextSize, MkextBuffer);
+  if (RETURN_ERROR (Status)) {
+    return 0;
+  }
+
+  MkextAllocatedSize = MkextGetAllocatedSize (*MkextBuffer, MkextSize, ReservedSize, NumReservedKexts, CpuType);
+  if (MkextAllocatedSize == 0) {
+    return 0;
+  }
+  return MkextAllocatedSize;
 }
 
 STATIC
 RETURN_STATUS
 ReadAppleKernelImage (
-  IN     UINT8                ImageType,
+  IN     BOOLEAN              IsMkext,
   IN     EFI_FILE_PROTOCOL    *File,
   IN     UINT32               ReservedSize,
+  IN     UINT32               NumReservedKexts,
      OUT UINT8                **Buffer,
      OUT UINT32               *BufferSize,
      OUT KERNEL_IMAGE_CONTEXT *Image32,
@@ -376,6 +382,9 @@ ReadAppleKernelImage (
   UINT8                 *ImageBuffer;
   UINT32                AllocatedSize;
 
+  //
+  // For single arch uses, *32 variables are used.
+  //
   BOOLEAN               IsFat;
   UINT32                Offset32;
   UINT32                Size32;
@@ -388,19 +397,14 @@ ReadAppleKernelImage (
   UINT32                AllocatedSize64;
   MACH_CPU_TYPE         CpuType64;
 
-  UINT32                ImageOffset;
-  UINT32                ImageSize;
-  MACH_CPU_TYPE         ImageCpuType;
+  UINT8                 *Mkext32;
+  UINT8                 *Mkext64;
 
   ASSERT (File != NULL);
   ASSERT (Buffer != NULL);
   ASSERT (BufferSize != NULL);
   ASSERT (Image32 != NULL);
   ASSERT (Image64 != NULL);
-
-  if (ImageType != KERNEL_IMAGE_TYPE_KERNEL && ImageType != KERNEL_IMAGE_TYPE_MKEXT) {
-    return RETURN_INVALID_PARAMETER;
-  }
 
   Status = ParseFatArchitectures (File, &IsFat, &Offset32, &Size32, &Offset64, &Size64);
   if (RETURN_ERROR (Status)) {
@@ -411,24 +415,22 @@ ReadAppleKernelImage (
   // Fat binary.
   //
   if (IsFat && Size32 != 0 && Size64 != 0) {
-    if (ImageType == KERNEL_IMAGE_TYPE_KERNEL) {
-      Size32 = GetAppleMachKernelSize (File, Offset32, Size32);
-      Size64 = GetAppleMachKernelSize (File, Offset64, Size64);
-      DEBUG ((DEBUG_INFO, "FAT kernel - 32-bit is %u bytes, 64-bit is %u bytes\n", Size32, Size64));
+    if (IsMkext) {
+      AllocatedSize32 = GetAppleMkextAllocatedSize (File, Offset32, Size32, ReservedSize, NumReservedKexts, &Mkext32, &CpuType32);
+      AllocatedSize64 = GetAppleMkextAllocatedSize (File, Offset64, Size64, ReservedSize, NumReservedKexts, &Mkext64, &CpuType64);
+      DEBUG ((DEBUG_INFO, "FAT mkext allocations - 32-bit is %u bytes, 64-bit is %u bytes\n", AllocatedSize32, AllocatedSize64));
     } else {
-      Size32 = GetAppleMkextKernelSize (File, Offset32, Size32);
-      Size64 = GetAppleMkextKernelSize (File, Offset64, Size64);
-      DEBUG ((DEBUG_INFO, "FAT mkext - 32-bit is %u bytes, 64-bit is %u bytes\n", Size32, Size64));
+      AllocatedSize32 = GetAppleKernelAllocatedSize (File, Offset32, Size32, ReservedSize);
+      AllocatedSize64 = GetAppleKernelAllocatedSize (File, Offset64, Size64, ReservedSize);
+      DEBUG ((DEBUG_INFO, "FAT kernel allocations - 32-bit is %u bytes, 64-bit is %u bytes\n", AllocatedSize32, AllocatedSize64));
     }
 
-    if (Size32 == 0 || Size64 == 0
-      || OcOverflowAddU32 (Size32, ReservedSize, &AllocatedSize32)
-      || OcOverflowAddU32 (Size64, ReservedSize, &AllocatedSize64)) {
+    if (AllocatedSize32 == 0 || AllocatedSize64 == 0) {
       return RETURN_INVALID_PARAMETER;
     }
+
     AllocatedSize32 = ALIGN_VALUE (AllocatedSize32, sizeof (UINT64));
     AllocatedSize64 = ALIGN_VALUE (AllocatedSize64, sizeof (UINT64));
-
     if (OcOverflowTriAddU32 (AllocatedSize32, AllocatedSize64, KERNEL_FAT_HEADER_SIZE, &AllocatedSize)) {
       return RETURN_INVALID_PARAMETER;
     }
@@ -443,30 +445,27 @@ ReadAppleKernelImage (
   // Fat-free proper binary or fat binary with only one Intel arch.
   //
   } else {
-    if (IsFat && Size32 != 0) {
-      ImageOffset   = Offset32;
-      ImageSize     = Size32;
-    } else if (IsFat && Size64 != 0) {
-      ImageOffset   = Offset64;
-      ImageSize     = Size64;
-    } else {
-      ImageOffset   = 0;
-      Status        = GetFileSize (File, &ImageSize);
+    if (IsFat && Size64 != 0) {
+      Offset32  = Offset64;
+      Size32    = Size64;
+    } else if (!IsFat) {
+      Offset32  = 0;
+      Status    = GetFileSize (File, &Size32);
       if (RETURN_ERROR (Status)) {
         return Status;
       }
     }
 
     IsFat = FALSE;
-    if (ImageType == KERNEL_IMAGE_TYPE_KERNEL) {
-      ImageSize = GetAppleMachKernelSize (File, ImageOffset, ImageSize);
-      DEBUG ((DEBUG_INFO, "Kernel is %u bytes\n", ImageSize));
+    if (IsMkext) {
+      AllocatedSize = GetAppleMkextAllocatedSize (File, Offset32, Size32, ReservedSize, NumReservedKexts, &Mkext32, &CpuType32);
+      DEBUG ((DEBUG_INFO, "Mkext allocated size is %u bytes\n", AllocatedSize));
     } else {
-      ImageSize = GetAppleMkextKernelSize (File, ImageOffset, ImageSize);
-      DEBUG ((DEBUG_INFO, "Mkext is %u bytes\n", ImageSize));
+      AllocatedSize = GetAppleKernelAllocatedSize (File, Offset32, Size32, ReservedSize);
+      DEBUG ((DEBUG_INFO, "Kernel allocated size is %u bytes\n", AllocatedSize));
     }
 
-    if (OcOverflowAddU32 (ImageSize, ReservedSize, &AllocatedSize)) {
+    if (AllocatedSize == 0) {
       return RETURN_INVALID_PARAMETER;
     }
     AllocatedSize = ALIGN_VALUE (AllocatedSize, sizeof (UINT64));
@@ -479,31 +478,31 @@ ReadAppleKernelImage (
   }
 
   if (IsFat) {
-    CreateFatHeader (ImageBuffer, AllocatedSize, AllocatedOffset32, Size32, AllocatedOffset64, Size64);
-
-    if (ImageType == KERNEL_IMAGE_TYPE_KERNEL) {
-      Status = ReadAppleMachKernel (File, Offset32, &((ImageBuffer)[AllocatedOffset32]), Size32, &CpuType32);
+    if (IsMkext) {
+      Status = MkextDecompress (Mkext32, Size32, NumReservedKexts, &((ImageBuffer)[AllocatedOffset32]), AllocatedSize32, &Size32);
       if (RETURN_ERROR (Status)) {
         FreePool (ImageBuffer);
         return Status;
       }
-      Status = ReadAppleMachKernel (File, Offset64, &((ImageBuffer)[AllocatedOffset64]), Size64, &CpuType64);
+      Status = MkextDecompress (Mkext64, Size64, NumReservedKexts, &((ImageBuffer)[AllocatedOffset64]), AllocatedSize64, &Size64);
       if (RETURN_ERROR (Status)) {
         FreePool (ImageBuffer);
         return Status;
       }
     } else {
-      Status = ReadAppleMkextKernel (File, Offset32, &((ImageBuffer)[AllocatedOffset32]), Size32, &CpuType32);
+      Status = ReadAppleKernelBinary (File, Offset32, &((ImageBuffer)[AllocatedOffset32]), &Size32, &CpuType32);
       if (RETURN_ERROR (Status)) {
         FreePool (ImageBuffer);
         return Status;
       }
-      Status = ReadAppleMkextKernel (File, Offset64, &((ImageBuffer)[AllocatedOffset64]), Size64, &CpuType64);
+      Status = ReadAppleKernelBinary (File, Offset64, &((ImageBuffer)[AllocatedOffset64]), &Size64, &CpuType64);
       if (RETURN_ERROR (Status)) {
         FreePool (ImageBuffer);
         return Status;
       }
     }
+
+    CreateFatHeader (ImageBuffer, AllocatedSize, AllocatedOffset32, Size32, AllocatedOffset64, Size64);
 
     if (CpuType32 != MachCpuTypeI386 || CpuType64 != MachCpuTypeX8664) {
       FreePool (ImageBuffer);
@@ -517,14 +516,16 @@ ReadAppleKernelImage (
     Image64->Size = Size64;
     Image64->AllocatedSize = AllocatedSize64;
   } else {
-    if (ImageType == KERNEL_IMAGE_TYPE_KERNEL) {
-      Status = ReadAppleMachKernel (File, ImageOffset, ImageBuffer, ImageSize, &ImageCpuType);
+    if (IsMkext) {
+      CpuType32 = MachCpuTypeI386;
+      Status = MkextDecompress (Mkext32, Size32, NumReservedKexts, ImageBuffer, AllocatedSize, &Size32);
       if (RETURN_ERROR (Status)) {
+        DEBUG ((DEBUG_INFO, "error mkext decomp\n"));
         FreePool (ImageBuffer);
         return Status;
       }
     } else {
-      Status = ReadAppleMkextKernel (File, ImageOffset, ImageBuffer, ImageSize, &ImageCpuType);
+      Status = ReadAppleKernelBinary (File, Offset32, ImageBuffer, &Size32, &CpuType32);
       if (RETURN_ERROR (Status)) {
         FreePool (ImageBuffer);
         return Status;
@@ -532,18 +533,20 @@ ReadAppleKernelImage (
     }
 
     //
-    // For non-fat kernels, only one set will be populated.
+    // For non-fat binaries, only one set will be populated.
     //
-    if (ImageCpuType == MachCpuTypeI386) {
-      Image32->Offset = 0;
-      Image32->Size = ImageSize;
+    Image32->Offset = 0;
+    Image64->Offset = 0;
+    if (CpuType32 == MachCpuTypeI386) {   
+      Image32->Size = Size32;
       Image32->AllocatedSize = AllocatedSize;
       Image64->Size = 0;
+      Image64->AllocatedSize = 0;
     } else {
-      Image64->Offset = 0;
-      Image64->Size = ImageSize;
+      Image64->Size = Size32;
       Image64->AllocatedSize = AllocatedSize;
       Image32->Size = 0;
+      Image32->AllocatedSize = 0;
     }
   }
 
@@ -562,20 +565,21 @@ ReadAppleKernel (
      OUT KERNEL_IMAGE_CONTEXT *Kernel64
   )
 {
-  return ReadAppleKernelImage (KERNEL_IMAGE_TYPE_KERNEL, File, ReservedSize, Buffer, BufferSize, Kernel32, Kernel64);
+  return ReadAppleKernelImage (FALSE, File, ReservedSize, 0, Buffer, BufferSize, Kernel32, Kernel64);
 }
 
 RETURN_STATUS
 ReadAppleMkext (
   IN     EFI_FILE_PROTOCOL    *File,
   IN     UINT32               ReservedSize,
+  IN     UINT32               NumReservedKexts,
      OUT UINT8                **Buffer,
      OUT UINT32               *BufferSize,
      OUT KERNEL_IMAGE_CONTEXT *Mkext32,
      OUT KERNEL_IMAGE_CONTEXT *Mkext64
   )
 {
-  return ReadAppleKernelImage (KERNEL_IMAGE_TYPE_MKEXT, File, ReservedSize, Buffer, BufferSize, Mkext32, Mkext64);
+  return ReadAppleKernelImage (TRUE, File, ReservedSize, NumReservedKexts, Buffer, BufferSize, Mkext32, Mkext64);
 }
 
 VOID
