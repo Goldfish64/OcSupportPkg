@@ -305,7 +305,7 @@ MkextGetAllocatedSize (
             return 0;
           }
 
-          DEBUG ((DEBUG_INFO, "Got executable @ 0x%X\n", BundleExecutableOffset));
+          //DEBUG ((DEBUG_INFO, "Got executable @ 0x%X\n", BundleExecutableOffset));
 
           // Add 128 bytes to account for string changes during decomp.
           if (OcOverflowTriAddU32 (BundleExecutableOffset, 128, sizeof (MKEXT_V2_FILE_ENTRY), &Tmp) || Tmp > Length) {
@@ -335,6 +335,8 @@ MkextGetAllocatedSize (
   if (OcOverflowAddU32 (FullLength, ReservedSize, &FullLength)) {
     return 0;
   }
+
+  *CpuType = SwapBytes32 (Mkext->Common.CpuType);
   return FullLength;
 }
 
