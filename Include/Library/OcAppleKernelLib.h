@@ -693,13 +693,19 @@ PatchPowerStateTimeout (
   IN OUT PATCHER_CONTEXT   *Patcher
   );
 
-UINT32
-MkextGetAllocatedSize (
+RETURN_STATUS
+MkextGetCpuType (
   IN     UINT8          *Buffer,
   IN     UINT32         BufferSize,
-  IN     UINT32         ReservedSize,
-  IN     UINT32         NumReservedKexts,
      OUT MACH_CPU_TYPE  *CpuType
+  );
+
+UINT32
+MkextGetAllocatedSize (
+  IN UINT8    *Buffer,
+  IN UINT32   BufferSize,
+  IN UINT32   ReservedSize,
+  IN UINT32   NumReservedKexts
   );
 
 RETURN_STATUS

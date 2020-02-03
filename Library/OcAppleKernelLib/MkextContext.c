@@ -40,7 +40,7 @@ ParseKextBinary (
 {
   MACH_HEADER_ANY *MachHeader;
 
-  //MachoFilterFatArchitectureByType (Buffer, BufferSize, CpuType);
+  MachoFilterFatArchitectureByType (Buffer, BufferSize, CpuType);
   MachHeader = (MACH_HEADER_ANY *)* Buffer; // TODO alignment?
 
   if ((CpuType == MachCpuTypeX86 && MachHeader->Signature == MACH_HEADER_SIGNATURE)
@@ -182,13 +182,44 @@ UpdateMkextV2Plist (
   return ExportedInfoSize;
 }
 
-UINT32
-MkextGetAllocatedSize (
+RETURN_STATUS
+MkextGetCpuType (
   IN     UINT8          *Buffer,
   IN     UINT32         BufferSize,
-  IN     UINT32         ReservedSize,
-  IN     UINT32         NumReservedKexts,
      OUT MACH_CPU_TYPE  *CpuType
+  )
+{
+  MKEXT_HEADER_ANY  *Mkext;
+  UINT32            Length;
+
+  ASSERT (Buffer != NULL);
+  ASSERT (BufferSize > 0);
+  ASSERT (CpuType != NULL);
+
+  if (BufferSize < sizeof (MKEXT_CORE_HEADER)
+    || !OC_TYPE_ALIGNED (MKEXT_HEADER_ANY, Buffer)) {
+    return RETURN_INVALID_PARAMETER;
+  }
+
+  Mkext     = (MKEXT_HEADER_ANY*)Buffer;
+  Length    = SwapBytes32 (Mkext->Common.Length);
+
+  if (Mkext->Common.Magic != MKEXT_INVERT_MAGIC
+    || Mkext->Common.Signature != MKEXT_INVERT_SIGNATURE
+    || Length != BufferSize) {
+    return RETURN_INVALID_PARAMETER;
+  }
+
+  *CpuType = SwapBytes32 (Mkext->Common.CpuType);
+  return RETURN_SUCCESS;
+}
+
+UINT32
+MkextGetAllocatedSize (
+  IN UINT8    *Buffer,
+  IN UINT32   BufferSize,
+  IN UINT32   ReservedSize,
+  IN UINT32   NumReservedKexts
   )
 {
   MKEXT_HEADER_ANY  *Mkext;
@@ -335,8 +366,6 @@ MkextGetAllocatedSize (
   if (OcOverflowAddU32 (FullLength, ReservedSize, &FullLength)) {
     return 0;
   }
-
-  *CpuType = SwapBytes32 (Mkext->Common.CpuType);
   return FullLength;
 }
 
@@ -667,18 +696,20 @@ MkextContextInit ( // TODO: Need Free function.
   ZeroMem (Context, sizeof (MKEXT_CONTEXT));
   Context->Mkext          = Mkext;
   Context->MkextHeader    = (MKEXT_HEADER_ANY*)Mkext;
-  Context->MkextSize      = SwapBytes32 (Context->MkextHeader->Common.Length);
-  Context->MkextAllocSize = MkextAllocSize;
-  Context->NumKexts       = SwapBytes32 (Context->MkextHeader->Common.NumKexts);
-  Context->CpuType        = SwapBytes32 (Context->MkextHeader->Common.CpuType);
-
-  DEBUG ((DEBUG_INFO, "Header size %u Buffer %u\n", SwapBytes32 (Context->MkextHeader->Common.Length), MkextSize));
-  ASSERT (MkextSize == SwapBytes32 (Context->MkextHeader->Common.Length));
 
   if (Context->MkextHeader->Common.Magic != MKEXT_INVERT_MAGIC
     || Context->MkextHeader->Common.Signature != MKEXT_INVERT_SIGNATURE) {
     return RETURN_INVALID_PARAMETER;
   }
+
+  Context->MkextSize      = SwapBytes32 (Context->MkextHeader->Common.Length);
+  if (MkextSize != Context->MkextSize) {
+    return RETURN_INVALID_PARAMETER;
+  }
+
+  Context->MkextAllocSize = MkextAllocSize;
+  Context->NumKexts       = SwapBytes32 (Context->MkextHeader->Common.NumKexts);
+  Context->CpuType        = SwapBytes32 (Context->MkextHeader->Common.CpuType);
 
   //
   // Check version.
