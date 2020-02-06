@@ -742,7 +742,7 @@ InternalRelocateRelocationIntel64 (
     return MAX_UINTN;
   }
 
-  InstructionPtr = MachoGetFilePointerByAddress64 (
+  InstructionPtr = MachoGetFilePointerByAddress (
                      &Kext->Context.MachContext,
                      (RelocationBase + Address),
                      &MaxSize
@@ -1308,7 +1308,7 @@ InternalPrelinkKext64 (
   //
   // Retrieve the symbol tables required for most following operations.
   //
-  NumSymbols = MachoGetSymbolTable (
+  NumSymbols = MachoGetSymbolTable64 (
                  MachoContext,
                  &SymbolTable,
                  &StringTable,
@@ -1369,7 +1369,7 @@ InternalPrelinkKext64 (
   // Solve indirect symbols.
   //
   WeakTestValue      = 0;
-  NumIndirectSymbols = MachoGetIndirectSymbolTable (
+  NumIndirectSymbols = MachoGetIndirectSymbolTable64 (
                          MachoContext,
                          &IndirectSymtab
                          );
@@ -1640,7 +1640,7 @@ InternalPrelinkKext64 (
   // Reinitialize the Mach-O context to account for the changed __LINKEDIT
   // segment and file size.
   //
-  if (!MachoInitializeContext (MachoContext, MachHeader, (SegmentOffset + SegmentSize))) {
+  if (!MachoInitializeContext (MachoContext, MachHeader, (SegmentOffset + SegmentSize), MachCpuTypeX8664)) {
     //
     // This should never failed under normal and abnormal conditions.
     //

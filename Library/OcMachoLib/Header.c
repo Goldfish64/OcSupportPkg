@@ -26,23 +26,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include "OcMachoLibInternal.h"
 
 /**
-  Returns the Mach-O Header structure.
-
-  @param[in,out] Context  Context of the Mach-O.
-
-**/
-MACH_HEADER_64 *
-MachoGetMachHeader64 (
-  IN OUT OC_MACHO_CONTEXT  *Context
-  )
-{
-  ASSERT (Context != NULL);
-  ASSERT (Context->MachHeader != NULL);
-
-  return Context->MachHeader;
-}
-
-/**
   Returns the Mach-O's file size.
 
   @param[in,out] Context  Context of the Mach-O.
@@ -66,27 +49,42 @@ MachoGetFileSize (
 
 **/
 UINT32
-MachoGetVmSize64 (
+MachoGetVmSize (
   IN OUT OC_MACHO_CONTEXT  *Context
   )
 {
   UINT64                   VmSize;
-  MACH_SEGMENT_COMMAND_64  *Segment;
+  MACH_SEGMENT_COMMAND     *Segment32;
+  MACH_SEGMENT_COMMAND_64  *Segment64;
 
   ASSERT (Context != NULL);
   ASSERT (Context->FileSize != 0);
 
   VmSize = 0;
 
-  for (
-    Segment = MachoGetNextSegment64 (Context, NULL);
-    Segment != NULL;
-    Segment = MachoGetNextSegment64 (Context, Segment)
-    ) {
-    if (OcOverflowAddU64 (VmSize, Segment->Size, &VmSize)) {
-      return 0;
+
+  if (Context->Is64Bit) {
+    for (
+      Segment64 = MachoGetNextSegment64 (Context, NULL);
+      Segment64 != NULL;
+      Segment64 = MachoGetNextSegment64 (Context, Segment64)
+      ) {
+      if (OcOverflowAddU64 (VmSize, Segment64->Size, &VmSize)) {
+        return 0;
+      }
+      VmSize = MACHO_ALIGN (VmSize);
     }
-    VmSize = MACHO_ALIGN (VmSize);
+  } else {
+    for (
+      Segment32 = MachoGetNextSegment32 (Context, NULL);
+      Segment32 != NULL;
+      Segment32 = MachoGetNextSegment32 (Context, Segment32)
+      ) {
+      if (OcOverflowAddU64 (VmSize, Segment32->Size, &VmSize)) {
+        return 0;
+      }
+      VmSize = MACHO_ALIGN (VmSize);
+    }
   }
 
   if (VmSize > MAX_UINT32) {
@@ -94,208 +92,6 @@ MachoGetVmSize64 (
   }
 
   return (UINT32) VmSize;
-}
-
-/**
-  Moves file pointer and size to point to desired slice in case
-  FAT Mach-O is used.
-
-  @param[in,out] FileData  Pointer to pointer of the file's data.
-  @param[in,out] FileSize  Pointer to file size of FileData.
-
-  @return FALSE is not valid FAT image.
-**/
-BOOLEAN
-MachoFilterFatArchitectureByType (
-  IN OUT UINT8         **FileData,
-  IN OUT UINT32        *FileSize,
-  IN     MACH_CPU_TYPE CpuType
-  )
-{
-  BOOLEAN           SwapBytes;
-  MACH_FAT_HEADER   *FatHeader;
-  UINT32            NumberOfFatArch;
-  UINT32            Offset;
-  MACH_CPU_TYPE     TmpCpuType;
-  UINT32            TmpSize;
-  UINT32            Index;
-  UINT32            Size;
-
-  ASSERT (FileData != NULL);
-  ASSERT (FileSize != NULL);
-
-  if (*FileSize < sizeof (MACH_FAT_HEADER)
-   || !OC_TYPE_ALIGNED (MACH_FAT_HEADER, *FileData)) {
-    return FALSE;
-  }
-  FatHeader = (MACH_FAT_HEADER *)* FileData;
-  if (FatHeader->Signature != MACH_FAT_BINARY_INVERT_SIGNATURE
-   && FatHeader->Signature != MACH_FAT_BINARY_SIGNATURE) {
-    return FALSE;
-  }
-
-  SwapBytes       = FatHeader->Signature == MACH_FAT_BINARY_INVERT_SIGNATURE;
-  NumberOfFatArch = FatHeader->NumberOfFatArch;
-  if (SwapBytes) {
-    NumberOfFatArch = SwapBytes32 (NumberOfFatArch);
-  }
-
-  if (OcOverflowMulAddU32 (NumberOfFatArch, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &TmpSize)
-    || TmpSize > *FileSize) {
-    return FALSE;
-  }
-
-  //
-  // TODO: extend the interface to support MachCpuSubtypeX8664H some day.
-  //
-  for (Index = 0; Index < NumberOfFatArch; ++Index) {
-    TmpCpuType = FatHeader->FatArch[Index].CpuType;
-    if (SwapBytes) {
-      TmpCpuType = SwapBytes32 (TmpCpuType);
-    }
-    if (TmpCpuType == CpuType) {
-      Offset = FatHeader->FatArch[Index].Offset;
-      Size   = FatHeader->FatArch[Index].Size;
-      if (SwapBytes) {
-        Offset = SwapBytes32 (Offset);
-        Size   = SwapBytes32 (Size);
-      }
-
-      if (Offset == 0
-        || OcOverflowAddU32 (Offset, Size, &TmpSize)
-        || TmpSize > *FileSize) {
-        return FALSE;
-      }
-
-      *FileData = *FileData + Offset;
-      *FileSize = Size;
-
-      return TRUE;
-    }
-  }
-
-  return FALSE;
-}
-
-BOOLEAN
-MachoFilterFatArchitecture32 (
-  IN OUT UINT8         **FileData,
-  IN OUT UINT32        *FileSize
-  )
-{
-  return MachoFilterFatArchitectureByType (FileData, FileSize, MachCpuTypeX86);
-}
-
-BOOLEAN
-MachoFilterFatArchitecture64 (
-  IN OUT UINT8         **FileData,
-  IN OUT UINT32        *FileSize
-  )
-{
-  return MachoFilterFatArchitectureByType (FileData, FileSize, MachCpuTypeX8664);
-}
-
-/**
-  Initializes a Mach-O Context.
-
-  @param[out] Context   Mach-O Context to initialize.
-  @param[in]  FileData  Pointer to the file's data.
-  @param[in]  FileSize  File size of FileData.
-
-  @return  Whether Context has been initialized successfully.
-**/
-BOOLEAN
-MachoInitializeContext (
-  OUT OC_MACHO_CONTEXT  *Context,
-  IN  VOID              *FileData,
-  IN  UINT32            FileSize
-  )
-{
-  MACH_HEADER_64          *MachHeader;
-  UINTN                   TopOfFile;
-  UINTN                   TopOfCommands;
-  UINT32                  Index;
-  CONST MACH_LOAD_COMMAND *Command;
-  UINTN                   TopOfCommand;
-  UINT32                  CommandsSize;
-  BOOLEAN                 Result;
-
-  ASSERT (FileData != NULL);
-  ASSERT (FileSize > 0);
-  ASSERT (Context != NULL);
-
-  TopOfFile = ((UINTN)FileData + FileSize);
-  ASSERT (TopOfFile > (UINTN)FileData);
-
-  MachoFilterFatArchitecture64 ((UINT8 **) &FileData, &FileSize);
-
-  if (FileSize < sizeof (*MachHeader)
-    || !OC_TYPE_ALIGNED (MACH_HEADER_64, FileData)) {
-    return FALSE;
-  }
-  MachHeader = (MACH_HEADER_64 *)FileData;
-  if (MachHeader->Signature != MACH_HEADER_64_SIGNATURE) {
-    return FALSE;
-  }
-
-  Result = OcOverflowAddUN (
-             (UINTN)MachHeader->Commands,
-             MachHeader->CommandsSize,
-             &TopOfCommands
-             );
-  if (Result || (TopOfCommands > TopOfFile)) {
-    return FALSE;
-  }
-
-  CommandsSize = 0;
-
-  for (
-    Index = 0, Command = MachHeader->Commands;
-    Index < MachHeader->NumCommands;
-    ++Index, Command = NEXT_MACH_LOAD_COMMAND (Command)
-    ) {
-    Result = OcOverflowAddUN (
-               (UINTN)Command,
-               sizeof (*Command),
-               &TopOfCommand
-               );
-    if (Result
-     || (TopOfCommand > TopOfCommands)
-     || (Command->CommandSize < sizeof (*Command))
-     || ((Command->CommandSize % sizeof (UINT64)) != 0)  // Assumption: 64-bit, see below.
-      ) {
-      return FALSE;
-    }
-
-    Result = OcOverflowAddU32 (
-               CommandsSize,
-               Command->CommandSize,
-               &CommandsSize
-               );
-    if (Result) {
-      return FALSE;
-    }
-  }
-
-  if (MachHeader->CommandsSize != CommandsSize) {
-    return FALSE;
-  }
-  //
-  // Verify assumptions made by this library.
-  // Carefully audit all "Assumption:" remarks before modifying these checks.
-  //
-  if ((MachHeader->CpuType != MachCpuTypeX8664)
-   || ((MachHeader->FileType != MachHeaderFileTypeKextBundle)
-    && (MachHeader->FileType != MachHeaderFileTypeExecute))) {
-    return FALSE;
-  }
-
-  ZeroMem (Context, sizeof (*Context));
-
-  Context->MachHeader = MachHeader;
-  Context->FileSize   = FileSize;
-
-  return TRUE;
 }
 
 /**
@@ -307,28 +103,44 @@ MachoInitializeContext (
 
 **/
 UINT64
-MachoGetLastAddress64 (
+MachoGetLastAddress (
   IN OUT OC_MACHO_CONTEXT  *Context
   )
 {
   UINT64                        LastAddress;
 
-  CONST MACH_SEGMENT_COMMAND_64 *Segment;
+  MACH_SEGMENT_COMMAND          *Segment32;
+  MACH_SEGMENT_COMMAND_64       *Segment64;
   UINT64                        Address;
 
   ASSERT (Context != NULL);
 
   LastAddress = 0;
 
-  for (
-    Segment = MachoGetNextSegment64 (Context, NULL);
-    Segment != NULL;
-    Segment = MachoGetNextSegment64 (Context, Segment)
-    ) {
-    Address = (Segment->VirtualAddress + Segment->Size);
 
-    if (Address > LastAddress) {
-      LastAddress = Address;
+  if (Context->Is64Bit) {
+    for (
+      Segment64 = MachoGetNextSegment64 (Context, NULL);
+      Segment64 != NULL;
+      Segment64 = MachoGetNextSegment64 (Context, Segment64)
+      ) {
+      Address = (Segment64->VirtualAddress + Segment64->Size);
+
+      if (Address > LastAddress) {
+        LastAddress = Address;
+      }
+    }
+  } else {
+    for (
+      Segment32 = MachoGetNextSegment32 (Context, NULL);
+      Segment32 != NULL;
+      Segment32 = MachoGetNextSegment32 (Context, Segment32)
+      ) {
+      Address = (Segment32->VirtualAddress + Segment32->Size);
+
+      if (Address > LastAddress) {
+        LastAddress = Address;
+      }
     }
   }
 
@@ -346,16 +158,18 @@ MachoGetLastAddress64 (
   @retval NULL  NULL is returned on failure.
 
 **/
-STATIC
 MACH_LOAD_COMMAND *
-InternalGetNextCommand64 (
+InternalGetNextCommand (
   IN OUT OC_MACHO_CONTEXT         *Context,
   IN     MACH_LOAD_COMMAND_TYPE   LoadCommandType,
   IN     CONST MACH_LOAD_COMMAND  *LoadCommand  OPTIONAL
   )
 {
+  MACH_HEADER_ANY         *MachHeader;
+  MACH_LOAD_COMMAND       *MachCommands;
+  UINT32                  MachCommandsSize;
+
   MACH_LOAD_COMMAND       *Command;
-  MACH_HEADER_64          *MachHeader;
   UINTN                   TopOfCommands;
 
   ASSERT (Context != NULL);
@@ -363,16 +177,24 @@ InternalGetNextCommand64 (
   MachHeader = Context->MachHeader;
   ASSERT (MachHeader != NULL);
 
-  TopOfCommands = ((UINTN)MachHeader->Commands + MachHeader->CommandsSize);
+  if (Context->Is64Bit) {
+    MachCommands      = MachHeader->Header64.Commands;
+    MachCommandsSize  = MachHeader->Header64.CommandsSize;
+  } else {
+    MachCommands      = MachHeader->Header32.Commands;
+    MachCommandsSize  = MachHeader->Header32.CommandsSize;
+  }
+
+  TopOfCommands = ((UINTN)MachCommands + MachCommandsSize);
 
   if (LoadCommand != NULL) {
     ASSERT (
-      (LoadCommand >= &MachHeader->Commands[0])
+      (LoadCommand >= &MachCommands[0])
         && ((UINTN)LoadCommand <= TopOfCommands)
       );
     Command = NEXT_MACH_LOAD_COMMAND (LoadCommand);
   } else {
-    Command = &MachHeader->Commands[0];
+    Command = &MachCommands[0];
   }
   
   for (
@@ -397,7 +219,7 @@ InternalGetNextCommand64 (
 
 **/
 MACH_UUID_COMMAND *
-MachoGetUuid64 (
+MachoGetUuid (
   IN OUT OC_MACHO_CONTEXT  *Context
   )
 {
@@ -407,7 +229,7 @@ MachoGetUuid64 (
 
   ASSERT (Context != NULL);
 
-  Tmp = InternalGetNextCommand64 (
+  Tmp = InternalGetNextCommand (
           Context,
           MACH_LOAD_COMMAND_UUID,
           NULL
@@ -424,411 +246,6 @@ MachoGetUuid64 (
 }
 
 /**
-  Retrieves the first segment by the name of SegmentName.
-
-  @param[in,out] Context      Context of the Mach-O.
-  @param[in]     SegmentName  Segment name to search for.
-
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SEGMENT_COMMAND_64 *
-MachoGetSegmentByName64 (
-  IN OUT OC_MACHO_CONTEXT  *Context,
-  IN     CONST CHAR8       *SegmentName
-  )
-{
-  MACH_SEGMENT_COMMAND_64 *Segment;
-  INTN                    Result;
-
-  ASSERT (Context != NULL);
-  ASSERT (SegmentName != NULL);
-
-  Result = 0;
-
-  for (
-    Segment = MachoGetNextSegment64 (Context, NULL);
-    Segment != NULL;
-    Segment = MachoGetNextSegment64 (Context, Segment)
-    ) {
-    Result = AsciiStrnCmp (
-                Segment->SegmentName,
-                SegmentName,
-                ARRAY_SIZE (Segment->SegmentName)
-                );
-    if (Result == 0) {
-      return Segment;
-    }
-  }
-
-  return NULL;
-}
-
-/**
-  Returns whether Section is sane.
-
-  @param[in,out] Context  Context of the Mach-O.
-  @param[in]     Section  Section to verify.
-  @param[in]     Segment  Segment the section is part of.
-
-**/
-STATIC
-BOOLEAN
-InternalSectionIsSane (
-  IN OUT OC_MACHO_CONTEXT               *Context,
-  IN     CONST MACH_SECTION_64          *Section,
-  IN     CONST MACH_SEGMENT_COMMAND_64  *Segment
-  )
-{
-  UINT64  TopOffset64;
-  UINT32  TopOffset32;
-  UINT64  TopOfSegment;
-  BOOLEAN Result;
-  UINT64  TopOfSection;
-
-  ASSERT (Context != NULL);
-  ASSERT (Section != NULL);
-  ASSERT (Segment != NULL);
-  //
-  // Section->Alignment is stored as a power of 2.
-  //
-  if ((Section->Alignment > 31)
-   || ((Section->Offset != 0) && (Section->Offset < Segment->FileOffset))) {
-    return FALSE;
-  }
-
-  TopOfSegment = (Segment->VirtualAddress + Segment->Size);
-  Result       = OcOverflowAddU64 (
-                   Section->Address,
-                   Section->Size,
-                   &TopOfSection
-                   );
-  if (Result || (TopOfSection > TopOfSegment)) {
-    return FALSE;
-  }
-
-  Result   = OcOverflowAddU64 (
-                Section->Offset,
-                Section->Size,
-                &TopOffset64
-                );
-  if (Result || (TopOffset64 > (Segment->FileOffset + Segment->FileSize))) {
-    return FALSE;
-  }
-
-  if (Section->NumRelocations != 0) {
-    Result = OcOverflowMulAddU32 (
-               Section->NumRelocations,
-               sizeof (MACH_RELOCATION_INFO),
-               Section->RelocationsOffset,
-               &TopOffset32
-               );
-    if (Result || (TopOffset32 > Context->FileSize)) {
-      return FALSE;
-    }
-  }
-
-  return TRUE;
-}
-
-/**
-  Retrieves the first section by the name of SectionName.
-
-  @param[in,out] Context      Context of the Mach-O.
-  @param[in]     Segment      Segment to search in.
-  @param[in]     SectionName  Section name to search for.
-
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SECTION_64 *
-MachoGetSectionByName64 (
-  IN OUT OC_MACHO_CONTEXT         *Context,
-  IN     MACH_SEGMENT_COMMAND_64  *Segment,
-  IN     CONST CHAR8              *SectionName
-  )
-{
-  MACH_SECTION_64 *Section;
-  INTN            Result;
-
-  ASSERT (Context != NULL);
-  ASSERT (Segment != NULL);
-  ASSERT (SectionName != NULL);
-
-  for (
-    Section = MachoGetNextSection64 (Context, Segment, NULL);
-    Section != NULL;
-    Section = MachoGetNextSection64 (Context, Segment, Section)
-    ) {
-    //
-    // Assumption: Mach-O is not of type MH_OBJECT.
-    // MH_OBJECT might have sections in segments they do not belong in for
-    // performance reasons.  This library does not support intermediate
-    // objects.
-    //
-    Result = AsciiStrnCmp (
-               Section->SectionName,
-               SectionName,
-               ARRAY_SIZE (Section->SectionName)
-               );
-    if (Result == 0) {
-      return Section;
-    }
-  }
-
-  return NULL;
-}
-
-/**
-  Retrieves a section within a segment by the name of SegmentName.
-
-  @param[in,out] Context      Context of the Mach-O.
-  @param[in]     SegmentName  The name of the segment to search in.
-  @param[in]     SectionName  The name of the section to search for.
-
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SECTION_64 *
-MachoGetSegmentSectionByName64 (
-  IN OUT OC_MACHO_CONTEXT  *Context,
-  IN     CONST CHAR8       *SegmentName,
-  IN     CONST CHAR8       *SectionName
-  )
-{
-  MACH_SEGMENT_COMMAND_64 *Segment;
-
-  ASSERT (Context != NULL);
-  ASSERT (SegmentName != NULL);
-  ASSERT (SectionName != NULL);
-
-  Segment = MachoGetSegmentByName64 (Context, SegmentName);
-
-  if (Segment != NULL) {
-    return MachoGetSectionByName64 (Context, Segment, SectionName);
-  }
-
-  return NULL;
-}
-
-/**
-  Retrieves the next segment.
-
-  @param[in,out] Context  Context of the Mach-O.
-  @param[in]     Segment  Segment to retrieve the successor of.
-                          if NULL, the first segment is returned.
-
-  @retal NULL  NULL is returned on failure.
-
-**/
-MACH_SEGMENT_COMMAND_64 *
-MachoGetNextSegment64 (
-  IN OUT OC_MACHO_CONTEXT               *Context,
-  IN     CONST MACH_SEGMENT_COMMAND_64  *Segment  OPTIONAL
-  )
-{
-  MACH_SEGMENT_COMMAND_64 *NextSegment;
-
-  CONST MACH_HEADER_64    *MachHeader;
-  UINTN                   TopOfCommands;
-  BOOLEAN                 Result;
-  UINT64                  TopOfSegment;
-  UINTN                   TopOfSections;
-
-  VOID                    *Tmp;
-
-  ASSERT (Context != NULL);
-
-  ASSERT (Context->MachHeader != NULL);
-  ASSERT (Context->FileSize > 0);
-
-  if (Segment != NULL) {
-    MachHeader    = Context->MachHeader;
-    TopOfCommands = ((UINTN) MachHeader->Commands + MachHeader->CommandsSize);
-    ASSERT (
-      ((UINTN) Segment >= (UINTN) &MachHeader->Commands[0])
-        && ((UINTN) Segment < TopOfCommands)
-      );
-  }
-
-  Tmp = InternalGetNextCommand64 (
-          Context,
-          MACH_LOAD_COMMAND_SEGMENT_64,
-          (MACH_LOAD_COMMAND *)Segment
-          );
-  if (Tmp == NULL || !OC_TYPE_ALIGNED (MACH_SEGMENT_COMMAND_64, Tmp)) {
-    return NULL;
-  }
-  NextSegment = (MACH_SEGMENT_COMMAND_64 *)Tmp;
-  if (NextSegment->CommandSize < sizeof (*NextSegment)) {
-    return NULL;
-  }
-
-  Result = OcOverflowMulAddUN (
-             NextSegment->NumSections,
-             sizeof (*NextSegment->Sections),
-             (UINTN) NextSegment->Sections,
-             &TopOfSections
-             );
-  if (Result || (((UINTN) NextSegment + NextSegment->CommandSize) < TopOfSections)) {
-    return NULL;
-  }
-
-  Result = OcOverflowAddU64 (
-             NextSegment->FileOffset,
-             NextSegment->FileSize,
-             &TopOfSegment
-             );
-  if (Result || (TopOfSegment > Context->FileSize)) {
-    return NULL;
-  }
-
-  return NextSegment;
-}
-
-/**
-  Retrieves the next section of a segment.
-
-
-  @param[in,out] Context  Context of the Mach-O.
-  @param[in]     Segment  The segment to get the section of.
-  @param[in]     Section  The section to get the successor of.
-                          If NULL, the first section is returned.
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SECTION_64 *
-MachoGetNextSection64 (
-  IN OUT OC_MACHO_CONTEXT         *Context,
-  IN     MACH_SEGMENT_COMMAND_64  *Segment,
-  IN     MACH_SECTION_64          *Section  OPTIONAL
-  )
-{
-  ASSERT (Context != NULL);
-  ASSERT (Segment != NULL);
-
-  if (Section != NULL) {
-    ASSERT (Section >= Segment->Sections);
-
-    ++Section;
-
-    if (Section >= &Segment->Sections[Segment->NumSections]) {
-      return NULL;
-    }
-  } else if (Segment->NumSections > 0) {
-    Section = &Segment->Sections[0];
-  } else {
-    return NULL;
-  }
-
-  if (!InternalSectionIsSane (Context, Section, Segment)) {
-    return NULL;
-  }
-
-  return Section;
-}
-
-/**
-  Retrieves a section by its index.
-
-  @param[in,out] Context  Context of the Mach-O.
-  @param[in]     Index    Index of the section to retrieve.
-
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SECTION_64 *
-MachoGetSectionByIndex64 (
-  IN OUT OC_MACHO_CONTEXT  *Context,
-  IN     UINT32            Index
-  )
-{
-  MACH_SECTION_64         *Section;
-
-  MACH_SEGMENT_COMMAND_64 *Segment;
-  UINT32                  SectionIndex;
-  UINT32                  NextSectionIndex;
-  BOOLEAN                 Result;
-
-  ASSERT (Context != NULL);
-
-  SectionIndex = 0;
-
-  Segment = NULL;
-  for (
-    Segment = MachoGetNextSegment64 (Context, NULL);
-    Segment != NULL;
-    Segment = MachoGetNextSegment64 (Context, Segment)
-    ) {
-    Result = OcOverflowAddU32 (
-               SectionIndex,
-               Segment->NumSections,
-               &NextSectionIndex
-               );
-    //
-    // If NextSectionIndex is wrapping around, Index must be contained.
-    //
-    if (Result || (Index < NextSectionIndex)) {
-      Section = &Segment->Sections[Index - SectionIndex];
-      if (!InternalSectionIsSane (Context, Section, Segment)) {
-        return NULL;
-      }
-
-      return Section;
-    }
-
-    SectionIndex = NextSectionIndex;
-  }
-
-  return NULL;
-}
-
-/**
-  Retrieves a section by its address.
-
-  @param[in,out] Context  Context of the Mach-O.
-  @param[in]     Address  Address of the section to retrieve.
-
-  @retval NULL  NULL is returned on failure.
-
-**/
-MACH_SECTION_64 *
-MachoGetSectionByAddress64 (
-  IN OUT OC_MACHO_CONTEXT  *Context,
-  IN     UINT64            Address
-  )
-{
-  MACH_SEGMENT_COMMAND_64 *Segment;
-  MACH_SECTION_64         *Section;
-  UINT64                  TopOfSegment;
-  UINT64                  TopOfSection;
-
-  ASSERT (Context != NULL);
-
-  for (
-    Segment = MachoGetNextSegment64 (Context, NULL);
-    Segment != NULL;
-    Segment = MachoGetNextSegment64 (Context, Segment)
-    ) {
-    TopOfSegment = (Segment->VirtualAddress + Segment->Size);
-    if ((Address >= Segment->VirtualAddress) && (Address < TopOfSegment)) {
-      for (
-        Section = MachoGetNextSection64 (Context, Segment, NULL);
-        Section != NULL;
-        Section = MachoGetNextSection64 (Context, Segment, Section)
-        ) {
-        TopOfSection = (Section->Address + Section->Size);
-        if ((Address >= Section->Address) && (Address < TopOfSection)) {
-          return Section;
-        }
-      }
-    }
-  }
-
-  return NULL;
-}
-
-/**
   Retrieves the SYMTAB command.
 
   @param[in,out] Context  Context of the Mach-O.
@@ -837,7 +254,7 @@ MachoGetSectionByAddress64 (
 
 **/
 BOOLEAN
-InternalRetrieveSymtabs64 (
+InternalRetrieveSymtabs (
   IN OUT OC_MACHO_CONTEXT  *Context
   )
 {
@@ -848,9 +265,12 @@ InternalRetrieveSymtabs64 (
   UINT32                FileSize;
   UINT32                OffsetTop;
   BOOLEAN               Result;
+  MACH_HEADER_FLAGS     MachFlags;
 
-  MACH_NLIST_64         *SymbolTable;
-  MACH_NLIST_64         *IndirectSymtab;
+  MACH_NLIST            *SymbolTable32;
+  MACH_NLIST            *IndirectSymtab32;
+  MACH_NLIST_64         *SymbolTable64;
+  MACH_NLIST_64         *IndirectSymtab64;
   MACH_RELOCATION_INFO  *LocalRelocations;
   MACH_RELOCATION_INFO  *ExternRelocations;
 
@@ -860,13 +280,14 @@ InternalRetrieveSymtabs64 (
   ASSERT (Context->MachHeader != NULL);
   ASSERT (Context->FileSize > 0);
 
-  if (Context->SymbolTable != NULL) {
+  if ((Context->Is64Bit && Context->SymbolTable64 != NULL)
+    || (!Context->Is64Bit && Context->SymbolTable32 != NULL)) {
     return TRUE;
   }
   //
   // Retrieve SYMTAB.
   //
-  Tmp = InternalGetNextCommand64 (
+  Tmp = InternalGetNextCommand (
           Context,
           MACH_LOAD_COMMAND_SYMTAB,
           NULL
@@ -908,21 +329,33 @@ InternalRetrieveSymtabs64 (
   }
 
   Tmp = (VOID *)(MachoAddress + Symtab->SymbolsOffset);
-  if (!OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp)) {
-    return FALSE;
+
+  if (Context->Is64Bit) {
+    if (!OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp)) {
+      return FALSE;
+    }
+    SymbolTable64 = (MACH_NLIST_64 *)Tmp;
+  } else {
+    if (!OC_TYPE_ALIGNED (MACH_NLIST, Tmp)) {
+      return FALSE;
+    }
+    SymbolTable32 = (MACH_NLIST *)Tmp;
   }
-  SymbolTable = (MACH_NLIST_64 *)Tmp;
 
   DySymtab          = NULL;
-  IndirectSymtab    = NULL;
+  IndirectSymtab32  = NULL;
+  IndirectSymtab64  = NULL;
   LocalRelocations  = NULL;
   ExternRelocations = NULL;
 
-  if ((Context->MachHeader->Flags & MACH_HEADER_FLAG_DYNAMIC_LINKER_LINK) != 0) {
+  MachFlags = Context->Is64Bit ?
+    Context->MachHeader->Header64.Flags : Context->MachHeader->Header32.Flags;
+
+  if ((MachFlags & MACH_HEADER_FLAG_DYNAMIC_LINKER_LINK) != 0) {
     //
     // Retrieve DYSYMTAB.
     //
-    Tmp = InternalGetNextCommand64 (
+    Tmp = InternalGetNextCommand (
             Context,
             MACH_LOAD_COMMAND_DYSYMTAB,
             NULL
@@ -964,7 +397,7 @@ InternalRetrieveSymtabs64 (
 
     Result = OcOverflowMulAddU32 (
                DySymtab->NumIndirectSymbols,
-               sizeof (MACH_NLIST_64),
+               Context->Is64Bit ? sizeof (MACH_NLIST_64) : sizeof (MACH_NLIST),
                DySymtab->IndirectSymbolsOffset,
                &OffsetTop
                );
@@ -993,10 +426,17 @@ InternalRetrieveSymtabs64 (
     }
 
     Tmp = (VOID *)(MachoAddress + DySymtab->IndirectSymbolsOffset);
-    if (!OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp)) {
-      return FALSE;
+    if (Context->Is64Bit) {
+      if (!OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp)) {
+        return FALSE;
+      }
+      IndirectSymtab64 = (MACH_NLIST_64 *)Tmp;
+    } else {
+      if (!OC_TYPE_ALIGNED (MACH_NLIST, Tmp)) {
+        return FALSE;
+      }
+      IndirectSymtab32 = (MACH_NLIST *)Tmp;
     }
-    IndirectSymtab = (MACH_NLIST_64 *)Tmp;
 
     Tmp = (VOID *)(MachoAddress + DySymtab->LocalRelocationsOffset);
     if (!OC_TYPE_ALIGNED (MACH_RELOCATION_INFO, Tmp)) {
@@ -1014,118 +454,22 @@ InternalRetrieveSymtabs64 (
   //
   // Store the symbol information.
   //
-  Context->Symtab      = Symtab;
-  Context->SymbolTable = SymbolTable;
-  Context->StringTable = StringTable;
-  Context->DySymtab    = DySymtab;
+  Context->Symtab               = Symtab;
+  
+  Context->StringTable          = StringTable;
+  Context->DySymtab             = DySymtab;
+  Context->LocalRelocations     = LocalRelocations;
+  Context->ExternRelocations    = ExternRelocations;
 
-  Context->IndirectSymbolTable = IndirectSymtab;
-  Context->LocalRelocations    = LocalRelocations;
-  Context->ExternRelocations   = ExternRelocations;
+  if (Context->Is64Bit) {
+    Context->SymbolTable64          = SymbolTable64;
+    Context->IndirectSymbolTable64  = IndirectSymtab64;
+  } else {
+    Context->SymbolTable32          = SymbolTable32;
+    Context->IndirectSymbolTable32  = IndirectSymtab32;
+  }
 
   return TRUE;
-}
-
-UINT32
-MachoGetSymbolTable (
-  IN OUT OC_MACHO_CONTEXT     *Context,
-     OUT CONST MACH_NLIST_64  **SymbolTable,
-     OUT CONST CHAR8          **StringTable OPTIONAL,
-     OUT CONST MACH_NLIST_64  **LocalSymbols, OPTIONAL
-     OUT UINT32               *NumLocalSymbols, OPTIONAL
-     OUT CONST MACH_NLIST_64  **ExternalSymbols, OPTIONAL
-     OUT UINT32               *NumExternalSymbols, OPTIONAL
-     OUT CONST MACH_NLIST_64  **UndefinedSymbols, OPTIONAL
-     OUT UINT32               *NumUndefinedSymbols OPTIONAL
-  )
-{
-  UINT32              Index;
-  CONST MACH_NLIST_64 *SymTab;
-  UINT32              NoLocalSymbols;
-  UINT32              NoExternalSymbols;
-  UINT32              NoUndefinedSymbols;
-
-  ASSERT (Context != NULL);
-
-  if (!InternalRetrieveSymtabs64 (Context)
-   || (Context->Symtab->NumSymbols == 0)) {
-    return 0;
-  }
-
-  SymTab = Context->SymbolTable;
-
-  for (Index = 0; Index < Context->Symtab->NumSymbols; ++Index) {
-    if (!InternalSymbolIsSane (Context, &SymTab[Index])) {
-      return 0;
-    }
-  }
-
-  *SymbolTable = Context->SymbolTable;
-
-  if (StringTable != NULL) {
-    *StringTable = Context->StringTable;
-  }
-
-  NoLocalSymbols     = 0;
-  NoExternalSymbols  = 0;
-  NoUndefinedSymbols = 0;
-
-  if (Context->DySymtab != NULL) {
-    NoLocalSymbols     = Context->DySymtab->NumLocalSymbols;
-    NoExternalSymbols  = Context->DySymtab->NumExternalSymbols;
-    NoUndefinedSymbols = Context->DySymtab->NumUndefinedSymbols;
-  }
-
-  if (NumLocalSymbols != NULL) {
-    ASSERT (LocalSymbols != NULL);
-    *NumLocalSymbols = NoLocalSymbols;
-    if (NoLocalSymbols != 0) {
-      *LocalSymbols = &SymTab[Context->DySymtab->LocalSymbolsIndex];
-    }
-  }
-
-  if (NumExternalSymbols != NULL) {
-    ASSERT (ExternalSymbols != NULL);
-    *NumExternalSymbols = NoExternalSymbols;
-    if (NoExternalSymbols != 0) {
-      *ExternalSymbols = &SymTab[Context->DySymtab->ExternalSymbolsIndex];
-    }
-  }
-
-  if (NumUndefinedSymbols != NULL) {
-    ASSERT (UndefinedSymbols != NULL);
-    *NumUndefinedSymbols = NoUndefinedSymbols;
-    if (NoUndefinedSymbols != 0) {
-      *UndefinedSymbols = &SymTab[Context->DySymtab->UndefinedSymbolsIndex];
-    }
-  }
-
-  return Context->Symtab->NumSymbols;
-}
-
-UINT32
-MachoGetIndirectSymbolTable (
-  IN OUT OC_MACHO_CONTEXT     *Context,
-  OUT    CONST MACH_NLIST_64  **SymbolTable
-  )
-{
-  UINT32 Index;
-
-  if (!InternalRetrieveSymtabs64 (Context)) {
-    return 0;
-  }
-
-  for (Index = 0; Index < Context->DySymtab->NumIndirectSymbols; ++Index) {
-    if (
-      !InternalSymbolIsSane (Context, &Context->IndirectSymbolTable[Index])
-      ) {
-      return 0;
-    }
-  }
-
-  *SymbolTable = Context->IndirectSymbolTable;
-
-  return Context->DySymtab->NumIndirectSymbols;
 }
 
 /**
@@ -1138,29 +482,50 @@ MachoGetIndirectSymbolTable (
 
 **/
 VOID *
-MachoGetFilePointerByAddress64 (
+MachoGetFilePointerByAddress (
   IN OUT OC_MACHO_CONTEXT  *Context,
   IN     UINT64            Address,
   OUT    UINT32            *MaxSize OPTIONAL
   )
 {
-  CONST MACH_SEGMENT_COMMAND_64 *Segment;
+  CONST MACH_SEGMENT_COMMAND    *Segment32;
+  CONST MACH_SEGMENT_COMMAND_64 *Segment64;
   UINT64                        Offset;
 
-  Segment = NULL;
-  while ((Segment = MachoGetNextSegment64 (Context, Segment)) != NULL) {
-    if ((Address >= Segment->VirtualAddress)
-     && (Address < Segment->VirtualAddress + Segment->Size)) {
-      Offset = (Address - Segment->VirtualAddress);
+  ASSERT (Context != NULL);
 
-      if (MaxSize != NULL) {
-        *MaxSize = (UINT32)(Segment->Size - Offset);
+  if (Context->Is64Bit) {
+    Segment64 = NULL;
+    while ((Segment64 = MachoGetNextSegment64 (Context, Segment64)) != NULL) {
+      if ((Address >= Segment64->VirtualAddress)
+      && (Address < Segment64->VirtualAddress + Segment64->Size)) {
+        Offset = (Address - Segment64->VirtualAddress);
+
+        if (MaxSize != NULL) {
+          *MaxSize = (UINT32)(Segment64->Size - Offset);
+        }
+
+        Offset += Segment64->FileOffset;
+        return (VOID *)((UINTN)Context->MachHeader + (UINTN)Offset);
       }
+    }
+  } else {
+    Segment32 = NULL;
+    while ((Segment32 = MachoGetNextSegment32 (Context, Segment32)) != NULL) {
+      if ((Address >= Segment32->VirtualAddress)
+      && (Address < Segment32->VirtualAddress + Segment32->Size)) {
+        Offset = (Address - Segment32->VirtualAddress);
 
-      Offset += Segment->FileOffset;
-      return (VOID *)((UINTN)Context->MachHeader + (UINTN)Offset);
+        if (MaxSize != NULL) {
+          *MaxSize = (UINT32)(Segment32->Size - Offset);
+        }
+
+        Offset += Segment32->FileOffset;
+        return (VOID *)((UINTN)Context->MachHeader + (UINTN)Offset);
+      }
     }
   }
+
 
   return NULL;
 }
@@ -1170,13 +535,13 @@ MachoGetFilePointerByAddress64 (
   Code Signature Load Command which must be removed for the binary has been
   modified by the prelinking routines.
 
-  @param[in,out] MachHeader  Mach-O header to strip the Load Commands from.
+  @param[in,out] Context  Context of the Mach-O to strip the Load Commands from.
 
 **/
 STATIC
 VOID
-InternalStripLoadCommands64 (
-  IN OUT MACH_HEADER_64  *MachHeader
+InternalStripLoadCommands (
+  IN OUT OC_MACHO_CONTEXT  *Context
   )
 {
   STATIC CONST MACH_LOAD_COMMAND_TYPE LoadCommandsToStrip[] = {
@@ -1188,20 +553,41 @@ InternalStripLoadCommands64 (
     MACH_LOAD_COMMAND_DYLIB_CODE_SIGN_DRS
   };
 
-  UINT32            Index;
-  UINT32            Index2;
-  MACH_LOAD_COMMAND *LoadCommand;
-  UINT32            SizeOfLeftCommands;
-  UINT32            OriginalCommandSize;
+  MACH_HEADER_ANY         *MachHeader;
+  MACH_LOAD_COMMAND       *MachCommands;
+  UINT32                  *MachCommandsSize;
+  UINT32                  *MachNumCommands;
+
+  UINT32                  Index;
+  UINT32                  Index2;
+  MACH_LOAD_COMMAND       *LoadCommand;
+  UINT32                  SizeOfLeftCommands;
+  UINT32                  OriginalCommandSize;
+
+  ASSERT (Context != NULL);
+
+  MachHeader = Context->MachHeader;
+  ASSERT (MachHeader != NULL);
+
+  if (Context->Is64Bit) {
+    MachCommands      = MachHeader->Header64.Commands;
+    MachCommandsSize  = &MachHeader->Header64.CommandsSize;
+    MachNumCommands   = &MachHeader->Header64.NumCommands;
+  } else {
+    MachCommands      = MachHeader->Header32.Commands;
+    MachCommandsSize  = &MachHeader->Header32.CommandsSize;
+    MachNumCommands   = &MachHeader->Header32.NumCommands;
+  }
+
   //
   // Delete the Code Signature Load Command if existent as we modified the
   // binary, as well as linker metadata not needed for runtime operation.
   //
-  LoadCommand         = MachHeader->Commands;
-  SizeOfLeftCommands  = MachHeader->CommandsSize;
+  LoadCommand         = MachCommands;
+  SizeOfLeftCommands  = *MachCommandsSize;
   OriginalCommandSize = SizeOfLeftCommands;
 
-  for (Index = 0; Index < MachHeader->NumCommands; ++Index) {
+  for (Index = 0; Index < *MachNumCommands; ++Index) {
     //
     // Assertion: LC_UNIXTHREAD and LC_MAIN are technically stripped in KXLD,
     //            but they are not supposed to be present in the first place.
@@ -1215,7 +601,7 @@ InternalStripLoadCommands64 (
 
     for (Index2 = 0; Index2 < ARRAY_SIZE (LoadCommandsToStrip); ++Index2) {
       if (LoadCommand->CommandType == LoadCommandsToStrip[Index2]) {
-        if (Index != (MachHeader->NumCommands - 1)) {
+        if (Index != (*MachNumCommands - 1)) {
           //
           // If the current Load Command is not the last one, relocate the
           // subsequent ones.
@@ -1227,8 +613,8 @@ InternalStripLoadCommands64 (
             );
         }
 
-        --MachHeader->NumCommands;
-        MachHeader->CommandsSize -= LoadCommand->CommandSize;
+        --(*MachNumCommands);
+        *MachCommandsSize -= LoadCommand->CommandSize;
 
         break;
       }
@@ -1237,11 +623,22 @@ InternalStripLoadCommands64 (
     LoadCommand = NEXT_MACH_LOAD_COMMAND (LoadCommand);
   }
 
-  ZeroMem (LoadCommand, OriginalCommandSize - MachHeader->CommandsSize);
+  ZeroMem (LoadCommand, OriginalCommandSize - *MachCommandsSize);
 }
 
+/**
+  Expand Mach-O image to Destination (make segment file sizes equal to vm sizes).
+
+  @param[in]  Context          Context of the Mach-O.
+  @param[out] Destination      Output buffer.
+  @param[in]  DestinationSize  Output buffer maximum size.
+  @param[in]  Strip            Output with stripped prelink commands.
+
+  @returns  New image size or 0 on failure.
+
+**/
 UINT32
-MachoExpandImage64 (
+MachoExpandImage (
   IN  OC_MACHO_CONTEXT   *Context,
   OUT UINT8              *Destination,
   IN  UINT32             DestinationSize,
@@ -1267,6 +664,9 @@ MachoExpandImage64 (
 
   ASSERT (Context != NULL);
   ASSERT (Context->FileSize != 0);
+
+  // TODO: Temporarily 64-bit only.
+  ASSERT (Context->Is64Bit);
 
   //
   // Header is valid, copy it first.
@@ -1351,7 +751,7 @@ MachoExpandImage64 (
     //
     if (AsciiStrnCmp (DstSegment->SegmentName, "__LINKEDIT", ARRAY_SIZE (DstSegment->SegmentName)) == 0) {
       Symtab = (MACH_SYMTAB_COMMAND *)(
-                 InternalGetNextCommand64 (
+                 InternalGetNextCommand (
                    Context,
                    MACH_LOAD_COMMAND_SYMTAB,
                    NULL
@@ -1369,7 +769,7 @@ MachoExpandImage64 (
       }
 
       DySymtab = (MACH_DYSYMTAB_COMMAND *)(
-                     InternalGetNextCommand64 (
+                     InternalGetNextCommand (
                        Context,
                        MACH_LOAD_COMMAND_DYSYMTAB,
                        NULL
@@ -1444,7 +844,7 @@ MachoExpandImage64 (
   }
 
   if (Strip) {
-    InternalStripLoadCommands64 ((MACH_HEADER_64 *) Destination);
+    InternalStripLoadCommands (Context);
   }
   //
   // This cast is safe because CurrentSize is verified against DestinationSize.
@@ -1452,6 +852,14 @@ MachoExpandImage64 (
   return (UINT32) CurrentSize;
 }
 
+/**
+  Find Mach-O entry point from LC_UNIXTHREAD loader command.
+  This command does not verify Mach-O and assumes it is valid.
+
+  @param[in]  Image  Loaded Mach-O image.
+
+  @returns  Entry point or 0.
+**/
 UINT64
 MachoRuntimeGetEntryAddress (
   IN VOID  *Image
@@ -1505,4 +913,224 @@ MachoRuntimeGetEntryAddress (
   }
 
   return Address;
+}
+
+/**
+  Moves file pointer and size to point to desired slice in case
+  FAT Mach-O is used.
+
+  @param[in,out] FileData  Pointer to pointer of the file's data.
+  @param[in,out] FileSize  Pointer to file size of FileData.
+  @param[in]     CpuType   Desired arch.
+
+  @return FALSE is not valid FAT image.
+**/
+BOOLEAN
+MachoFilterFatArchitectureByType (
+  IN OUT UINT8         **FileData,
+  IN OUT UINT32        *FileSize,
+  IN     MACH_CPU_TYPE CpuType
+  )
+{
+  BOOLEAN           SwapBytes;
+  MACH_FAT_HEADER   *FatHeader;
+  UINT32            NumberOfFatArch;
+  UINT32            Offset;
+  MACH_CPU_TYPE     TmpCpuType;
+  UINT32            TmpSize;
+  UINT32            Index;
+  UINT32            Size;
+
+  ASSERT (FileData != NULL);
+  ASSERT (FileSize != NULL);
+
+  if (*FileSize < sizeof (MACH_FAT_HEADER)
+   || !OC_TYPE_ALIGNED (MACH_FAT_HEADER, *FileData)) {
+    return FALSE;
+  }
+  FatHeader = (MACH_FAT_HEADER *)* FileData;
+  if (FatHeader->Signature != MACH_FAT_BINARY_INVERT_SIGNATURE
+   && FatHeader->Signature != MACH_FAT_BINARY_SIGNATURE) {
+    return FALSE;
+  }
+
+  SwapBytes       = FatHeader->Signature == MACH_FAT_BINARY_INVERT_SIGNATURE;
+  NumberOfFatArch = FatHeader->NumberOfFatArch;
+  if (SwapBytes) {
+    NumberOfFatArch = SwapBytes32 (NumberOfFatArch);
+  }
+
+  if (OcOverflowMulAddU32 (NumberOfFatArch, sizeof (MACH_FAT_ARCH), sizeof (MACH_FAT_HEADER), &TmpSize)
+    || TmpSize > *FileSize) {
+    return FALSE;
+  }
+
+  //
+  // TODO: extend the interface to support MachCpuSubtypeX8664H some day.
+  //
+  for (Index = 0; Index < NumberOfFatArch; ++Index) {
+    TmpCpuType = FatHeader->FatArch[Index].CpuType;
+    if (SwapBytes) {
+      TmpCpuType = SwapBytes32 (TmpCpuType);
+    }
+    if (TmpCpuType == CpuType) {
+      Offset = FatHeader->FatArch[Index].Offset;
+      Size   = FatHeader->FatArch[Index].Size;
+      if (SwapBytes) {
+        Offset = SwapBytes32 (Offset);
+        Size   = SwapBytes32 (Size);
+      }
+
+      if (Offset == 0
+        || OcOverflowAddU32 (Offset, Size, &TmpSize)
+        || TmpSize > *FileSize) {
+        return FALSE;
+      }
+
+      *FileData = *FileData + Offset;
+      *FileSize = Size;
+
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+  Initializes a Mach-O Context.
+
+  @param[out] Context   Mach-O Context to initialize.
+  @param[in]  FileData  Pointer to the file's data.
+  @param[in]  FileSize  File size of FileData.
+  @param[in]  CpuType   Desired arch to use in case of FAT binary.
+
+  @return  Whether Context has been initialized successfully.
+**/
+BOOLEAN
+MachoInitializeContext (
+  OUT OC_MACHO_CONTEXT  *Context,
+  IN  VOID              *FileData,
+  IN  UINT32            FileSize,
+  IN  MACH_CPU_TYPE     CpuType
+  )
+{
+  MACH_HEADER_ANY         *MachHeader;
+  MACH_HEADER_FILE_TYPE   MachFileType;
+  MACH_LOAD_COMMAND       *MachCommands;
+  UINT32                  MachCommandsSize;
+  UINT32                  MachNumCommands;
+  BOOLEAN                 Is64Bit;
+
+  UINTN                   TopOfFile;
+  UINTN                   TopOfCommands;
+  UINT32                  Index;
+  CONST MACH_LOAD_COMMAND *Command;
+  UINTN                   TopOfCommand;
+  UINT32                  CommandsSize;
+  BOOLEAN                 Result;
+
+  ASSERT (FileData != NULL);
+  ASSERT (FileSize > 0);
+  ASSERT (Context != NULL);
+  ASSERT (CpuType == MachCpuTypeI386 || CpuType == MachCpuTypeX8664);
+
+  TopOfFile = ((UINTN)FileData + FileSize);
+  ASSERT (TopOfFile > (UINTN)FileData);
+
+  MachoFilterFatArchitectureByType ((UINT8 **) &FileData, &FileSize, CpuType);
+
+
+  if (FileSize < sizeof (*MachHeader)
+    || !OC_TYPE_ALIGNED (MACH_HEADER_ANY, FileData)) {
+    return FALSE;
+  }
+  MachHeader = (MACH_HEADER_ANY*)FileData;
+
+  if (MachHeader->Signature == MACH_HEADER_SIGNATURE) {
+    //
+    // 32-bit header.
+    //
+    Is64Bit = FALSE;
+    MachFileType      = MachHeader->Header32.FileType;
+    MachCommands      = MachHeader->Header32.Commands;
+    MachCommandsSize  = MachHeader->Header32.CommandsSize;
+    MachNumCommands   = MachHeader->Header32.NumCommands;
+  } else if (MachHeader->Signature == MACH_HEADER_64_SIGNATURE) {
+    //
+    // 64-bit header.
+    //
+    Is64Bit = TRUE;
+    MachFileType      = MachHeader->Header64.FileType;
+    MachCommands      = MachHeader->Header64.Commands;
+    MachCommandsSize  = MachHeader->Header64.CommandsSize;
+    MachNumCommands   = MachHeader->Header64.NumCommands;
+  } else {
+    //
+    // Invalid Mach-O image.
+    //
+    return FALSE;
+  }
+
+  Result = OcOverflowAddUN (
+             (UINTN)MachCommands,
+             MachCommandsSize,
+             &TopOfCommands
+             );
+  if (Result || (TopOfCommands > TopOfFile)) {
+    return FALSE;
+  }
+
+  CommandsSize = 0;
+
+  for (
+    Index = 0, Command = MachCommands;
+    Index < MachNumCommands;
+    ++Index, Command = NEXT_MACH_LOAD_COMMAND (Command)
+    ) {
+    Result = OcOverflowAddUN (
+               (UINTN)Command,
+               sizeof (*Command),
+               &TopOfCommand
+               );
+    if (Result
+     || (TopOfCommand > TopOfCommands)
+     || (Command->CommandSize < sizeof (*Command))
+     || ((Command->CommandSize % sizeof (UINT64)) != 0)  // Assumption: 64-bit, see below.
+      ) {
+      return FALSE;
+    }
+
+    Result = OcOverflowAddU32 (
+               CommandsSize,
+               Command->CommandSize,
+               &CommandsSize
+               );
+    if (Result) {
+      return FALSE;
+    }
+  }
+
+  if (MachCommandsSize != CommandsSize) {
+    return FALSE;
+  }
+
+  //
+  // Verify assumptions made by this library.
+  // Carefully audit all "Assumption:" remarks before modifying these checks.
+  //
+  // Assumed to be 32-bit Intel or 64-bit Intel based on checks above.
+  //
+  if ((MachFileType != MachHeaderFileTypeKextBundle)
+    && (MachFileType != MachHeaderFileTypeExecute)) {
+    return FALSE;
+  }
+
+  ZeroMem (Context, sizeof (*Context));
+
+  Context->MachHeader = MachHeader;
+  Context->FileSize   = FileSize;
+  Context->Is64Bit    = Is64Bit;
+
+  return TRUE;
 }

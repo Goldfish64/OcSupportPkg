@@ -265,7 +265,7 @@ InternalPatchVtableSymbol (
   //
   // 1) If the symbol is defined locally, do not patch
   //
-  if (MachoSymbolIsLocalDefined (MachoContext, Symbol)) {
+  if (MachoSymbolIsLocalDefined64 (MachoContext, Symbol)) {
     return TRUE;
   }
 
@@ -305,7 +305,7 @@ InternalPatchVtableSymbol (
   // declared as part of the class and not inherited, which means we
   // should not patch it.
   //
-  if (!MachoSymbolIsDefined (Symbol)) {
+  if (!MachoSymbolIsDefined64 (Symbol)) {
     ClassName = MachoGetClassNameFromVtableName (VtableName);
 
     Success = MachoGetFunctionPrefixFromClassName (
@@ -795,7 +795,7 @@ InternalPatchByVtables64 (
         return FALSE;
       }
 
-      SymbolDummy = MachoGetLocalDefinedSymbolByName (
+      SymbolDummy = MachoGetLocalDefinedSymbolByName64 (
                   MachoContext,
                   FinalSymbolName
                   );

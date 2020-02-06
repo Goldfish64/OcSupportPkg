@@ -20,6 +20,24 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/OcMachoLib.h>
 
 /**
+  Retrieves the first Load Command of type LoadCommandType.
+
+  @param[in,out] Context          Context of the Mach-O.
+  @param[in]     LoadCommandType  Type of the Load Command to retrieve.
+  @param[in]     LoadCommand      Previous Load Command.
+                                  If NULL, the first match is returned.
+
+  @retval NULL  NULL is returned on failure.
+
+**/
+MACH_LOAD_COMMAND *
+InternalGetNextCommand (
+  IN OUT OC_MACHO_CONTEXT         *Context,
+  IN     MACH_LOAD_COMMAND_TYPE   LoadCommandType,
+  IN     CONST MACH_LOAD_COMMAND  *LoadCommand  OPTIONAL
+  );
+
+/**
   Retrieves the SYMTAB command.
 
   @param[in] Context  Context of the Mach-O.
@@ -27,7 +45,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
   @retval NULL  NULL is returned on failure.
 **/
 BOOLEAN
-InternalRetrieveSymtabs64 (
+InternalRetrieveSymtabs (
   IN OUT OC_MACHO_CONTEXT  *Context
   );
 
@@ -61,7 +79,7 @@ InternalGetLocalRelocationByOffset (
   );
 
 /**
-  Check symbol validity.
+  Check 32-bit symbol validity.
 
   @param[in,out] Context  Context of the Mach-O.
   @param[in]     Symbol   Symbol from some table.
@@ -69,9 +87,53 @@ InternalGetLocalRelocationByOffset (
   @retval TRUE on success.
 **/
 BOOLEAN
-InternalSymbolIsSane (
+InternalSymbolIsSane32 (
+  IN OUT OC_MACHO_CONTEXT     *Context,
+  IN     CONST MACH_NLIST     *Symbol
+  );
+
+/**
+  Check 64-bit symbol validity.
+
+  @param[in,out] Context  Context of the Mach-O.
+  @param[in]     Symbol   Symbol from some table.
+
+  @retval TRUE on success.
+**/
+BOOLEAN
+InternalSymbolIsSane64 (
   IN OUT OC_MACHO_CONTEXT     *Context,
   IN     CONST MACH_NLIST_64  *Symbol
+  );
+
+/**
+  Returns whether 32-bit Section is sane.
+
+  @param[in,out] Context  Context of the Mach-O.
+  @param[in]     Section  Section to verify.
+  @param[in]     Segment  Segment the section is part of.
+
+**/
+BOOLEAN
+InternalSectionIsSane32 (
+  IN OUT OC_MACHO_CONTEXT               *Context,
+  IN     CONST MACH_SECTION             *Section,
+  IN     CONST MACH_SEGMENT_COMMAND     *Segment
+  );
+
+/**
+  Returns whether 64-bit Section is sane.
+
+  @param[in,out] Context  Context of the Mach-O.
+  @param[in]     Section  Section to verify.
+  @param[in]     Segment  Segment the section is part of.
+
+**/
+BOOLEAN
+InternalSectionIsSane64 (
+  IN OUT OC_MACHO_CONTEXT               *Context,
+  IN     CONST MACH_SECTION_64          *Section,
+  IN     CONST MACH_SEGMENT_COMMAND_64  *Segment
   );
 
 #endif // OC_MACHO_LIB_INTERNAL_H_

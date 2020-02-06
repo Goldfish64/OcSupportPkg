@@ -32,6 +32,9 @@
 [Sources]
   CxxSymbols.c
   Header.c
+  Header32.c
+  Header64.c
   OcMachoLibInternal.h
   Relocations.c
-  Symbols.c
+  Symbols32.c
+  Symbols64.c

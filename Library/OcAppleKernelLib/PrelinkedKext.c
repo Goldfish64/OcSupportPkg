@@ -151,7 +151,7 @@ InternalCreatePrelinkedKext (
   }
 
   if (Prelinked != NULL
-    && !MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize)) {
+    && !MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize, MachCpuTypeX8664)) {
     FreePool (NewKext);
     return NULL;
   }
@@ -184,7 +184,7 @@ InternalScanCurrentPrelinkedKextLinkedEdit (
   }
 
   if (Kext->SymbolTable == NULL) {
-    Kext->NumberOfSymbols = MachoGetSymbolTable (
+    Kext->NumberOfSymbols = MachoGetSymbolTable64 (
                    &Kext->Context.MachContext,
                    &Kext->SymbolTable,
                    &Kext->StringTable,
@@ -369,7 +369,7 @@ InternalScanBuildLinkedVtables (
     //       need to abort anyway when the value is out of its bounds, we can
     //       just locate it by address in the first place.
     //
-    Tmp = MachoGetFilePointerByAddress64 (
+    Tmp = MachoGetFilePointerByAddress (
             &Kext->Context.MachContext,
             VtableLookups[Index].Vtable.Value,
             &VtableMaxSize
@@ -580,7 +580,7 @@ InternalCachedPrelinkedKernel (
   ASSERT (Prelinked->Prelinked != NULL);
   ASSERT (Prelinked->PrelinkedSize > 0);
 
-  if (!MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[0], Prelinked->PrelinkedSize)) {
+  if (!MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[0], Prelinked->PrelinkedSize, MachCpuTypeX8664)) {
     FreePool (NewKext);
     return NULL;
   }

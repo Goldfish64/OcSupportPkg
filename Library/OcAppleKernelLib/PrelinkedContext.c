@@ -188,11 +188,11 @@ PrelinkedContextInit (
     ZeroMem (&Prelinked[PrelinkedSize], Context->PrelinkedSize - PrelinkedSize);
   }
 
-  if (!MachoInitializeContext (&Context->PrelinkedMachContext, Prelinked, PrelinkedSize)) {
+  if (!MachoInitializeContext (&Context->PrelinkedMachContext, Prelinked, PrelinkedSize, MachCpuTypeX8664)) {
     return RETURN_INVALID_PARAMETER;
   }
 
-  Context->PrelinkedLastAddress = MACHO_ALIGN (MachoGetLastAddress64 (&Context->PrelinkedMachContext));
+  Context->PrelinkedLastAddress = MACHO_ALIGN (MachoGetLastAddress (&Context->PrelinkedMachContext));
   if (Context->PrelinkedLastAddress == 0) {
     return RETURN_INVALID_PARAMETER;
   }
@@ -381,7 +381,7 @@ PrelinkedInjectPrepare (
   Context->PrelinkedInfoSection->Size           = 0;
   Context->PrelinkedInfoSection->Offset         = 0;
 
-  Context->PrelinkedLastAddress = MACHO_ALIGN (MachoGetLastAddress64 (&Context->PrelinkedMachContext));
+  Context->PrelinkedLastAddress = MACHO_ALIGN (MachoGetLastAddress (&Context->PrelinkedMachContext));
   if (Context->PrelinkedLastAddress == 0) {
     return RETURN_INVALID_PARAMETER;
   }
@@ -476,11 +476,11 @@ PrelinkedReserveKextSize (
 
   if (Executable != NULL) {
     ASSERT (ExecutableSize > 0);
-    if (!MachoInitializeContext (&Context, Executable, ExecutableSize)) {
+    if (!MachoInitializeContext (&Context, Executable, ExecutableSize, MachCpuTypeX8664)) {
       return RETURN_INVALID_PARAMETER;
     }
 
-    ExecutableSize = MachoGetVmSize64 (&Context);
+    ExecutableSize = MachoGetVmSize (&Context);
     if (ExecutableSize == 0) {
       return RETURN_INVALID_PARAMETER;
     }
@@ -536,12 +536,12 @@ PrelinkedInjectKext (
   //
   if (Executable != NULL) {
     ASSERT (ExecutableSize > 0);
-    if (!MachoInitializeContext (&ExecutableContext, (UINT8 *)Executable, ExecutableSize)) {
+    if (!MachoInitializeContext (&ExecutableContext, (UINT8 *)Executable, ExecutableSize, MachCpuTypeX8664)) {
       DEBUG ((DEBUG_INFO, "OCK: Injected kext %a/%a is not a supported executable\n", BundlePath, ExecutablePath));
       return RETURN_INVALID_PARAMETER;
     }
 
-    ExecutableSize = MachoExpandImage64 (
+    ExecutableSize = MachoExpandImage (
       &ExecutableContext,
       &Context->Prelinked[Context->PrelinkedSize],
       Context->PrelinkedAllocSize - Context->PrelinkedSize,
@@ -561,7 +561,7 @@ PrelinkedInjectKext (
       AlignedExecutableSize - ExecutableSize
       );
 
-    if (!MachoInitializeContext (&ExecutableContext, &Context->Prelinked[Context->PrelinkedSize], ExecutableSize)) {
+    if (!MachoInitializeContext (&ExecutableContext, &Context->Prelinked[Context->PrelinkedSize], ExecutableSize, MachCpuTypeX8664)) {
       return RETURN_INVALID_PARAMETER;
     }
 

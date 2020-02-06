@@ -128,6 +128,9 @@ InternalGetExternRelocationByOffset (
   IN     UINT64            Address
   )
 {
+  // Former impl was 64-bit only during context creation, move enforcement here.
+  ASSERT (Context->Is64Bit);
+  
   return InternalLookupRelocationByOffset (
            Address,
            Context->DySymtab->NumExternalRelocations,
@@ -150,6 +153,9 @@ InternalGetLocalRelocationByOffset (
   IN     UINT64            Address
   )
 {
+  // Former impl was 64-bit only during context creation, move enforcement here.
+  ASSERT (Context->Is64Bit);
+
   return InternalLookupRelocationByOffset (
            Address,
            Context->DySymtab->NumOfLocalRelocations,

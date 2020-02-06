@@ -64,7 +64,7 @@ PatcherInitContextFromBuffer (
   // and request PRELINK_KERNEL_IDENTIFIER.
   //
 
-  if (!MachoInitializeContext (&Context->MachContext, Buffer, BufferSize)) {
+  if (!MachoInitializeContext (&Context->MachContext, Buffer, BufferSize, MachCpuTypeX8664)) {
     return RETURN_INVALID_PARAMETER;
   }
 
