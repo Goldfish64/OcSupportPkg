@@ -1003,16 +1003,16 @@ MachoFilterFatArchitectureByType (
   @param[out] Context   Mach-O Context to initialize.
   @param[in]  FileData  Pointer to the file's data.
   @param[in]  FileSize  File size of FileData.
-  @param[in]  CpuType   Desired arch to use in case of FAT binary.
+  @param[in]  Is64Bit   Arch to use.
 
   @return  Whether Context has been initialized successfully.
 **/
 BOOLEAN
-MachoInitializeContext (
+InternalMachoInitializeContext (
   OUT OC_MACHO_CONTEXT  *Context,
   IN  VOID              *FileData,
   IN  UINT32            FileSize,
-  IN  MACH_CPU_TYPE     CpuType
+  IN  BOOLEAN           Is64Bit
   )
 {
   MACH_HEADER_ANY         *MachHeader;
@@ -1020,7 +1020,6 @@ MachoInitializeContext (
   MACH_LOAD_COMMAND       *MachCommands;
   UINT32                  MachCommandsSize;
   UINT32                  MachNumCommands;
-  BOOLEAN                 Is64Bit;
 
   UINTN                   TopOfFile;
   UINTN                   TopOfCommands;
@@ -1033,12 +1032,11 @@ MachoInitializeContext (
   ASSERT (FileData != NULL);
   ASSERT (FileSize > 0);
   ASSERT (Context != NULL);
-  ASSERT (CpuType == MachCpuTypeI386 || CpuType == MachCpuTypeX8664);
 
   TopOfFile = ((UINTN)FileData + FileSize);
   ASSERT (TopOfFile > (UINTN)FileData);
 
-  MachoFilterFatArchitectureByType ((UINT8 **) &FileData, &FileSize, CpuType);
+  MachoFilterFatArchitectureByType ((UINT8 **) &FileData, &FileSize, Is64Bit ? MachCpuTypeX8664 : MachCpuTypeI386);
 
 
   if (FileSize < sizeof (*MachHeader)
@@ -1051,7 +1049,6 @@ MachoInitializeContext (
     //
     // 32-bit header.
     //
-    Is64Bit = FALSE;
     MachFileType      = MachHeader->Header32.FileType;
     MachCommands      = MachHeader->Header32.Commands;
     MachCommandsSize  = MachHeader->Header32.CommandsSize;
@@ -1060,7 +1057,6 @@ MachoInitializeContext (
     //
     // 64-bit header.
     //
-    Is64Bit = TRUE;
     MachFileType      = MachHeader->Header64.FileType;
     MachCommands      = MachHeader->Header64.Commands;
     MachCommandsSize  = MachHeader->Header64.CommandsSize;

@@ -151,7 +151,7 @@ InternalCreatePrelinkedKext (
   }
 
   if (Prelinked != NULL
-    && !MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize, MachCpuTypeX8664)) {
+    && !MachoInitializeContext64 (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize)) {
     FreePool (NewKext);
     return NULL;
   }
@@ -580,7 +580,7 @@ InternalCachedPrelinkedKernel (
   ASSERT (Prelinked->Prelinked != NULL);
   ASSERT (Prelinked->PrelinkedSize > 0);
 
-  if (!MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[0], Prelinked->PrelinkedSize, MachCpuTypeX8664)) {
+  if (!MachoInitializeContext64 (&NewKext->Context.MachContext, &Prelinked->Prelinked[0], Prelinked->PrelinkedSize)) {
     FreePool (NewKext);
     return NULL;
   }

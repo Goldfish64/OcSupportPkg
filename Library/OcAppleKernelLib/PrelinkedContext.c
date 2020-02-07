@@ -188,7 +188,7 @@ PrelinkedContextInit (
     ZeroMem (&Prelinked[PrelinkedSize], Context->PrelinkedSize - PrelinkedSize);
   }
 
-  if (!MachoInitializeContext (&Context->PrelinkedMachContext, Prelinked, PrelinkedSize, MachCpuTypeX8664)) {
+  if (!MachoInitializeContext64 (&Context->PrelinkedMachContext, Prelinked, PrelinkedSize)) {
     return RETURN_INVALID_PARAMETER;
   }
 
@@ -476,7 +476,7 @@ PrelinkedReserveKextSize (
 
   if (Executable != NULL) {
     ASSERT (ExecutableSize > 0);
-    if (!MachoInitializeContext (&Context, Executable, ExecutableSize, MachCpuTypeX8664)) {
+    if (!MachoInitializeContext64 (&Context, Executable, ExecutableSize)) {
       return RETURN_INVALID_PARAMETER;
     }
 
@@ -536,7 +536,7 @@ PrelinkedInjectKext (
   //
   if (Executable != NULL) {
     ASSERT (ExecutableSize > 0);
-    if (!MachoInitializeContext (&ExecutableContext, (UINT8 *)Executable, ExecutableSize, MachCpuTypeX8664)) {
+    if (!MachoInitializeContext64 (&ExecutableContext, (UINT8 *)Executable, ExecutableSize)) {
       DEBUG ((DEBUG_INFO, "OCK: Injected kext %a/%a is not a supported executable\n", BundlePath, ExecutablePath));
       return RETURN_INVALID_PARAMETER;
     }
@@ -561,7 +561,7 @@ PrelinkedInjectKext (
       AlignedExecutableSize - ExecutableSize
       );
 
-    if (!MachoInitializeContext (&ExecutableContext, &Context->Prelinked[Context->PrelinkedSize], ExecutableSize, MachCpuTypeX8664)) {
+    if (!MachoInitializeContext64 (&ExecutableContext, &Context->Prelinked[Context->PrelinkedSize], ExecutableSize)) {
       return RETURN_INVALID_PARAMETER;
     }
 

@@ -65,24 +65,6 @@ MachoFilterFatArchitectureByType (
   );
 
 /**
-  Initializes a Mach-O Context.
-
-  @param[out] Context   Mach-O Context to initialize.
-  @param[in]  FileData  Pointer to the file's data.
-  @param[in]  FileSize  File size of FileData.
-  @param[in]  CpuType   Desired arch to use in case of FAT binary.
-
-  @return  Whether Context has been initialized successfully.
-**/
-BOOLEAN
-MachoInitializeContext (
-  OUT OC_MACHO_CONTEXT  *Context,
-  IN  VOID              *FileData,
-  IN  UINT32            FileSize,
-  IN  MACH_CPU_TYPE     CpuType
-  );
-
-/**
   Returns the Mach-O's file size.
 
   @param[in,out] Context  Context of the Mach-O.
@@ -191,6 +173,22 @@ BOOLEAN
 MachoFilterFatArchitecture32 (
   IN OUT UINT8         **FileData,
   IN OUT UINT32        *FileSize
+  );
+
+/**
+  Initializes a 32-bit Mach-O Context.
+
+  @param[out] Context   Mach-O Context to initialize.
+  @param[in]  FileData  Pointer to the file's data.
+  @param[in]  FileSize  File size of FileData.
+
+  @return  Whether Context has been initialized successfully.
+**/
+BOOLEAN
+MachoInitializeContext32 (
+  OUT OC_MACHO_CONTEXT  *Context,
+  IN  VOID              *FileData,
+  IN  UINT32            FileSize
   );
 
 /**
@@ -368,6 +366,22 @@ BOOLEAN
 MachoFilterFatArchitecture64 (
   IN OUT UINT8         **FileData,
   IN OUT UINT32        *FileSize
+  );
+
+/**
+  Initializes a 64-bit Mach-O Context.
+
+  @param[out] Context   Mach-O Context to initialize.
+  @param[in]  FileData  Pointer to the file's data.
+  @param[in]  FileSize  File size of FileData.
+
+  @return  Whether Context has been initialized successfully.
+**/
+BOOLEAN
+MachoInitializeContext64 (
+  OUT OC_MACHO_CONTEXT  *Context,
+  IN  VOID              *FileData,
+  IN  UINT32            FileSize
   );
 
 /**

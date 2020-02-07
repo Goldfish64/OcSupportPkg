@@ -110,6 +110,25 @@ MachoFilterFatArchitecture64 (
 }
 
 /**
+  Initializes a 64-bit Mach-O Context.
+
+  @param[out] Context   Mach-O Context to initialize.
+  @param[in]  FileData  Pointer to the file's data.
+  @param[in]  FileSize  File size of FileData.
+
+  @return  Whether Context has been initialized successfully.
+**/
+BOOLEAN
+MachoInitializeContext64 (
+  OUT OC_MACHO_CONTEXT  *Context,
+  IN  VOID              *FileData,
+  IN  UINT32            FileSize
+  )
+{
+  return InternalMachoInitializeContext (Context, FileData, FileSize, TRUE);
+}
+
+/**
   Returns the Mach-O Header structure.
 
   @param[in,out] Context  Context of the Mach-O.
