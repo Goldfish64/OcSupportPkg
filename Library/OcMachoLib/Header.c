@@ -1092,7 +1092,7 @@ InternalMachoInitializeContext (
     if (Result
      || (TopOfCommand > TopOfCommands)
      || (Command->CommandSize < sizeof (*Command))
-     || ((Command->CommandSize % sizeof (UINT64)) != 0)  // Assumption: 64-bit, see below.
+     || ((Command->CommandSize % (Is64Bit ? sizeof (UINT64) : sizeof (UINT32))) != 0)
       ) {
       return FALSE;
     }
@@ -1118,7 +1118,8 @@ InternalMachoInitializeContext (
   // Assumed to be 32-bit Intel or 64-bit Intel based on checks above.
   //
   if ((MachFileType != MachHeaderFileTypeKextBundle)
-    && (MachFileType != MachHeaderFileTypeExecute)) {
+    && (MachFileType != MachHeaderFileTypeExecute)
+    && (MachFileType != MachHeaderFileTypeObject)) {
     return FALSE;
   }
 

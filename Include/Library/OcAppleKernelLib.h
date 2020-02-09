@@ -154,6 +154,14 @@ typedef struct {
   // Virtual kmod_info_t address.
   //
   UINT64                   VirtualKmod;
+  //
+  // File offset of __text section.
+  //
+  UINT64                   FileOffset;
+  //
+  // Patcher context bitness.
+  //
+  BOOLEAN                  Is64Bit;
 } PATCHER_CONTEXT;
 
 //
@@ -461,7 +469,7 @@ PatcherInitContextFromPrelinked (
   );
 
 /**
-  Initialize patcher from buffer for e.g. kernel patching.
+  Initialize 32-bit patcher from buffer for e.g. kernel patching.
 
   @param[in,out] Context         Patcher context.
   @param[in,out] Buffer          Kernel buffer (could be prelinked).
@@ -470,7 +478,23 @@ PatcherInitContextFromPrelinked (
   @return  RETURN_SUCCESS on success.
 **/
 RETURN_STATUS
-PatcherInitContextFromBuffer (
+PatcherInitContextFromBuffer32 (
+  IN OUT PATCHER_CONTEXT    *Context,
+  IN OUT UINT8              *Buffer,
+  IN     UINT32             BufferSize
+  );
+
+/**
+  Initialize 64-bit patcher from buffer for e.g. kernel patching.
+
+  @param[in,out] Context         Patcher context.
+  @param[in,out] Buffer          Kernel buffer (could be prelinked).
+  @param[in]     BufferSize      Kernel buffer size.
+
+  @return  RETURN_SUCCESS on success.
+**/
+RETURN_STATUS
+PatcherInitContextFromBuffer64 (
   IN OUT PATCHER_CONTEXT    *Context,
   IN OUT UINT8              *Buffer,
   IN     UINT32             BufferSize
@@ -737,7 +761,13 @@ MkextInjectKext (
   );
 
 RETURN_STATUS
-MkextInjectComplete (
+MkextBlockKext (
+  IN OUT MKEXT_CONTEXT      *Context,
+  IN     CONST CHAR8        *Identifier
+  );
+
+RETURN_STATUS
+MkextInjectPatchComplete (
   IN OUT MKEXT_CONTEXT      *Context
   );
 

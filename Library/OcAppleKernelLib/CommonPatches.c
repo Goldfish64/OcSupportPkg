@@ -217,8 +217,14 @@ PatchAppleXcpmCfgLock (
 
   UINT32              Replacements;
 
-  Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
-    + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  if (Patcher->Is64Bit) {
+    Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  } else {
+    Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader32 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  }
+  
 
   Replacements = 0;
 
@@ -339,8 +345,13 @@ PatchAppleXcpmExtraMsrs (
   XCPM_MSR_RECORD     *Last;
   UINT32              Replacements;
 
-  Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
-    + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  if (Patcher->Is64Bit) {
+    Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  } else {
+    Last = (XCPM_MSR_RECORD *) ((UINT8 *) MachoGetMachHeader32 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - sizeof (XCPM_MSR_RECORD));
+  }
 
   Replacements = 0;
 
@@ -457,7 +468,11 @@ PatchAppleXcpmForceBoost (
   UINT8   *Last;
   UINT8   *Current;
 
-  Start   = (UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext);
+  if (Patcher->Is64Bit) {
+    Start = (UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext);
+  } else {
+    Start = (UINT8 *) MachoGetMachHeader32 (&Patcher->MachContext);
+  }
   Last    = Start + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE*2;
   Start  += EFI_PAGE_SIZE;
   Current = Start;
@@ -1057,8 +1072,13 @@ PatchKernelCpuId (
     && mKernelCpuIdFindRelNew[3] == mKernelCpuIdFindRelOld[3]
     );
 
-  Last = ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
-    + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE*2 - sizeof (mKernelCpuIdFindRelNew));
+  if (Patcher->Is64Bit) {
+    Last = ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE*2 - sizeof (mKernelCpuIdFindRelNew));
+  } else {
+    Last = ((UINT8 *) MachoGetMachHeader32 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE*2 - sizeof (mKernelCpuIdFindRelNew));
+  }
 
   Status = PatcherGetSymbolAddress (Patcher, "_cpuid_set_info", (UINT8 **) &Record);
   if (RETURN_ERROR (Status) || Record >= Last) {
@@ -1252,8 +1272,13 @@ PatchPanicKextDump (
   UINT8               *Record;
   UINT8               *Last;
 
-  Last = ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
-    + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE);
+  if (Patcher->Is64Bit) {
+    Last = ((UINT8 *) MachoGetMachHeader64 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE);
+  } else {
+    Last = ((UINT8 *) MachoGetMachHeader32 (&Patcher->MachContext)
+      + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE);
+  }
 
   //
   // This should work on 10.15 and all debug kernels.

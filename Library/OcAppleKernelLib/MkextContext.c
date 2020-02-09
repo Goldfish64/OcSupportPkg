@@ -281,10 +281,11 @@ MkextGetAllocatedSize (
     if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumTotalKexts, FullLength, &FullLength)) {
       return 0;
     }
+    FullLength = ALIGN_VALUE (FullLength, sizeof (UINT64));
 
     for (Index = 0; Index < NumKexts; Index++) {
-      PlistFullLength = SwapBytes32 (Mkext->V1.Kexts[Index].Plist.FullSize);
-      BinFullLength = SwapBytes32 (Mkext->V1.Kexts[Index].Binary.FullSize);
+      PlistFullLength = ALIGN_VALUE (SwapBytes32 (Mkext->V1.Kexts[Index].Plist.FullSize), sizeof (UINT64));
+      BinFullLength = ALIGN_VALUE (SwapBytes32 (Mkext->V1.Kexts[Index].Binary.FullSize), sizeof (UINT64));
 
       if (OcOverflowTriAddU32 (FullLength, PlistFullLength, BinFullLength, &FullLength)) {
         DEBUG ((DEBUG_INFO, "error3\n"));
@@ -464,6 +465,7 @@ MkextDecompress (
         DEBUG ((DEBUG_INFO, "error mkext decomp 4\n"));
       return RETURN_INVALID_PARAMETER;
     }
+    CurrentOffset = ALIGN_VALUE (CurrentOffset, sizeof (UINT64));
 
     for (Index = 0; Index < NumKexts; Index++) {
       PlistOffset     = SwapBytes32 (Mkext->V1.Kexts[Index].Plist.Offset);
@@ -488,7 +490,7 @@ MkextDecompress (
       MkextOut->V1.Kexts[Index].Plist.CompressedSize = 0;
       MkextOut->V1.Kexts[Index].Plist.FullSize = SwapBytes32 (PlistFullLength);
       MkextOut->V1.Kexts[Index].Plist.ModifiedSeconds = Mkext->V1.Kexts[Index].Plist.ModifiedSeconds;
-      if (OcOverflowAddU32 (CurrentOffset, PlistFullLength, &CurrentOffset)) {
+      if (OcOverflowAddU32 (CurrentOffset, ALIGN_VALUE (PlistFullLength, sizeof (UINT64)), &CurrentOffset)) {
         DEBUG ((DEBUG_INFO, "error mkext decomp 6\n"));
         return RETURN_INVALID_PARAMETER;
       }
@@ -510,7 +512,7 @@ MkextDecompress (
         MkextOut->V1.Kexts[Index].Binary.CompressedSize = 0;
         MkextOut->V1.Kexts[Index].Binary.FullSize = SwapBytes32 (BinFullLength);
         MkextOut->V1.Kexts[Index].Binary.ModifiedSeconds = Mkext->V1.Kexts[Index].Binary.ModifiedSeconds;
-        if (OcOverflowAddU32 (CurrentOffset, BinFullLength, &CurrentOffset)) {
+        if (OcOverflowAddU32 (CurrentOffset, ALIGN_VALUE (BinFullLength, sizeof (UINT64)), &CurrentOffset)) {
           DEBUG ((DEBUG_INFO, "error mkext decomp 8\n"));
           return RETURN_INVALID_PARAMETER;
         }
@@ -660,7 +662,7 @@ MkextDecompress (
 }
 
 RETURN_STATUS
-MkextContextInit ( // TODO: Need Free function.
+MkextContextInit (
   IN OUT  MKEXT_CONTEXT      *Context,
   IN OUT  UINT8              *Mkext,
   IN      UINT32             MkextSize,
@@ -681,6 +683,11 @@ MkextContextInit ( // TODO: Need Free function.
   UINT32              Index;
   UINT32              StartingOffset;
   UINT32              CurrentOffset;
+
+  //
+  // Assumptions:
+  //    Kexts are fully decompressed with plist (for v2) at end of mkext.
+  //
 
   ASSERT (Context != NULL);
   ASSERT (Mkext != NULL);
@@ -710,21 +717,14 @@ MkextContextInit ( // TODO: Need Free function.
   Context->MkextAllocSize = MkextAllocSize;
   Context->NumKexts       = SwapBytes32 (Context->MkextHeader->Common.NumKexts);
   Context->CpuType        = SwapBytes32 (Context->MkextHeader->Common.CpuType);
-
-  //
-  // Check version.
-  //
-  Context->MkextVersion = SwapBytes32 (Context->MkextHeader->Common.Version);
-  DEBUG ((DEBUG_INFO, "Mkext version 0x%X\n", Context->MkextVersion));
-
+  Context->MkextVersion   = SwapBytes32 (Context->MkextHeader->Common.Version);
 
   //
   // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
-    
     //
-    // Calculate avaiable kext slots.
+    // Calculate available kext slots.
     //
     StartingOffset = 0;
     for (Index = 0; Index < Context->NumKexts; Index++) {
@@ -743,7 +743,9 @@ MkextContextInit ( // TODO: Need Free function.
       }
     }
 
-    Context->NumMaxKexts = (StartingOffset - (sizeof (MKEXT_V1_HEADER) + (sizeof (MKEXT_V1_KEXT) * Context->NumKexts))) / sizeof (MKEXT_V1_KEXT) + Context->NumKexts;
+    Context->NumMaxKexts =
+      (StartingOffset - (sizeof (MKEXT_V1_HEADER) + (sizeof (MKEXT_V1_KEXT) * Context->NumKexts)))
+      / sizeof (MKEXT_V1_KEXT) + Context->NumKexts;
     DEBUG ((DEBUG_INFO, "max kext slots %u\n", Context->NumMaxKexts));
     DEBUG ((DEBUG_INFO, "start offset 0x%X\n", StartingOffset));
 
@@ -1001,11 +1003,116 @@ MkextInjectKext (
 }
 
 RETURN_STATUS
-MkextInjectComplete (
+MkextBlockKext (
+  IN OUT MKEXT_CONTEXT      *Context,
+  IN     CONST CHAR8        *Identifier
+  )
+{
+  RETURN_STATUS Status;
+
+  UINT32        Index;
+  UINT32        PlistOffset;
+  UINT32        PlistLength;
+  UINT32        BinaryOffset;
+  UINT32        BinaryLength;
+
+  UINT8         *PlistBuffer;
+  UINT32        PlistBufferSize;
+  XML_DOCUMENT  *PlistDoc;
+  XML_NODE      *PlistRoot;
+
+  PATCHER_CONTEXT Patcher;
+
+  ASSERT (Context != NULL);
+  ASSERT (Identifier != NULL);
+
+  //
+  // Mkext v1.
+  //
+  if (Context->MkextVersion == MKEXT_VERSION_V1) {
+
+    PlistBufferSize = SIZE_1MB;
+    PlistBuffer = AllocatePool (PlistBufferSize);
+    if (PlistBuffer == NULL) {
+      return RETURN_OUT_OF_RESOURCES;
+    }
+
+    for (Index = 0; Index < Context->NumKexts; Index++) {
+      PlistOffset   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.Offset);
+      PlistLength   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.FullSize);
+      BinaryOffset  = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.Offset);
+      BinaryLength  = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.FullSize);
+
+      if (PlistBufferSize < PlistLength) {
+        FreePool (PlistBuffer);
+        PlistBufferSize = PlistLength;
+        PlistBuffer = AllocatePool (PlistBufferSize);
+        if (PlistBuffer == NULL) {
+          return RETURN_OUT_OF_RESOURCES;
+        }
+      }
+
+      CopyMem (PlistBuffer, &Context->Mkext[PlistOffset], PlistLength);
+      
+      PlistDoc = XmlDocumentParse ((CHAR8*)PlistBuffer, PlistLength, FALSE);
+      ASSERT (PlistDoc != NULL);
+
+      PlistRoot = PlistNodeCast (PlistDocumentRoot (PlistDoc), PLIST_NODE_TYPE_DICT);
+      ASSERT (PlistRoot != NULL);
+
+      
+      XML_NODE *BundleArray;
+      UINT32 MkextInfoRootCount = PlistDictChildren (PlistRoot);
+      for (UINT32 MkextInfoRootIndex = 0; MkextInfoRootIndex < MkextInfoRootCount; MkextInfoRootIndex++) {
+        CONST CHAR8 *BundleArrayKey = PlistKeyValue (PlistDictChild (PlistRoot, MkextInfoRootIndex, &BundleArray));
+        if (AsciiStrCmp (BundleArrayKey, INFO_BUNDLE_IDENTIFIER_KEY) == 0) {
+          UINT32 strSize;
+
+          PlistStringSize (BundleArray, &strSize);
+          CHAR8 *str = AllocateZeroPool (strSize);
+
+          PlistStringValue (BundleArray, str, &strSize);
+
+          
+          if (AsciiStrCmp (str, Identifier) == 0) {
+            DEBUG ((DEBUG_INFO, "Got bundle ID %a at 0x%X 0x%X\n", str, BinaryOffset, *((UINT32*)&Context->Mkext[BinaryOffset])));
+
+            Status = PatcherInitContextFromBuffer32 (&Patcher, &Context->Mkext[BinaryOffset], BinaryLength);
+            ASSERT (!RETURN_ERROR (Status));
+
+            Status = PatcherBlockKext (&Patcher);
+            ASSERT (!RETURN_ERROR (Status));
+          }
+        }
+      }
+    }
+
+      
+
+      
+
+
+
+    FreePool (PlistBuffer);
+    return RETURN_SUCCESS;
+
+  //
+  // Mkext v2.
+  //
+  } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
+
+    return RETURN_SUCCESS;
+  }
+
+  return RETURN_UNSUPPORTED;
+}
+
+RETURN_STATUS
+MkextInjectPatchComplete (
   IN OUT MKEXT_CONTEXT      *Context
   )
 {
-  UINT32      MkextPlistSize;
+  UINT32 MkextPlistSize;
 
   //
   // Mkext v1.
