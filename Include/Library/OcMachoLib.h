@@ -161,6 +161,24 @@ MachoRuntimeGetEntryAddress (
   );
 
 /**
+  Initializes a Mach-O Context.
+
+  @param[out] Context   Mach-O Context to initialize.
+  @param[in]  FileData  Pointer to the file's data.
+  @param[in]  FileSize  File size of FileData.
+  @param[in]  Is64Bit   Arch to use.
+
+  @return  Whether Context has been initialized successfully.
+**/
+BOOLEAN
+MachoInitializeContext (
+  OUT OC_MACHO_CONTEXT  *Context,
+  IN  VOID              *FileData,
+  IN  UINT32            FileSize,
+  IN  BOOLEAN           Is64Bit
+  );
+
+/**
   Moves file pointer and size to point to 32-bit slice in case
   FAT Mach-O is used.
 

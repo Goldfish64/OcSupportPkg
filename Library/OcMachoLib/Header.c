@@ -1008,7 +1008,7 @@ MachoFilterFatArchitectureByType (
   @return  Whether Context has been initialized successfully.
 **/
 BOOLEAN
-InternalMachoInitializeContext (
+MachoInitializeContext (
   OUT OC_MACHO_CONTEXT  *Context,
   IN  VOID              *FileData,
   IN  UINT32            FileSize,

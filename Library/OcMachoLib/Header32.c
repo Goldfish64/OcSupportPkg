@@ -125,7 +125,7 @@ MachoInitializeContext32 (
   IN  UINT32            FileSize
   )
 {
-  return InternalMachoInitializeContext (Context, FileData, FileSize, FALSE);
+  return MachoInitializeContext (Context, FileData, FileSize, FALSE);
 }
 
 /**
