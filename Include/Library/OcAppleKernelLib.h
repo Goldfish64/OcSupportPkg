@@ -238,8 +238,7 @@ typedef struct {
   //
   // CPU type.
   //
-  MACH_CPU_TYPE             CpuType;
-
+  BOOLEAN                   Is64Bit;
   //
   // Current number of kexts.
   //
@@ -469,35 +468,21 @@ PatcherInitContextFromPrelinked (
   );
 
 /**
-  Initialize 32-bit patcher from buffer for e.g. kernel patching.
+  Initialize patcher from buffer for e.g. kernel patching.
 
   @param[in,out] Context         Patcher context.
   @param[in,out] Buffer          Kernel buffer (could be prelinked).
   @param[in]     BufferSize      Kernel buffer size.
+  @param[in]     Is64Bit         Bitness.
 
   @return  RETURN_SUCCESS on success.
 **/
 RETURN_STATUS
-PatcherInitContextFromBuffer32 (
+PatcherInitContextFromBuffer (
   IN OUT PATCHER_CONTEXT    *Context,
   IN OUT UINT8              *Buffer,
-  IN     UINT32             BufferSize
-  );
-
-/**
-  Initialize 64-bit patcher from buffer for e.g. kernel patching.
-
-  @param[in,out] Context         Patcher context.
-  @param[in,out] Buffer          Kernel buffer (could be prelinked).
-  @param[in]     BufferSize      Kernel buffer size.
-
-  @return  RETURN_SUCCESS on success.
-**/
-RETURN_STATUS
-PatcherInitContextFromBuffer64 (
-  IN OUT PATCHER_CONTEXT    *Context,
-  IN OUT UINT8              *Buffer,
-  IN     UINT32             BufferSize
+  IN     UINT32             BufferSize,
+  IN     BOOLEAN            Is64Bit
   );
 
 /**

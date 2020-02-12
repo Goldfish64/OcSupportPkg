@@ -29,22 +29,26 @@
 
 #define MKEXT_OFFSET_STR_LEN    24
 
+//
+// Alignment to 8 bytes.
+//
+#define MKEXT_ALIGN(a)         (ALIGN_VALUE (a, sizeof (UINT64)))
 
 STATIC
 BOOLEAN
 ParseKextBinary (
   IN OUT UINT8         **Buffer,
   IN OUT UINT32        *BufferSize,
-  IN     MACH_CPU_TYPE CpuType
+  IN     BOOLEAN       Is64Bit
   )
 {
   MACH_HEADER_ANY *MachHeader;
-
-  MachoFilterFatArchitectureByType (Buffer, BufferSize, CpuType);
+  
+  MachoFilterFatArchitectureByType (Buffer, BufferSize, Is64Bit ? MachCpuTypeX8664 : MachCpuTypeI386);
   MachHeader = (MACH_HEADER_ANY *)* Buffer; // TODO alignment?
 
-  if ((CpuType == MachCpuTypeX86 && MachHeader->Signature == MACH_HEADER_SIGNATURE)
-    || (CpuType == MachCpuTypeX8664 && MachHeader->Signature == MACH_HEADER_64_SIGNATURE)) {
+  if ((!Is64Bit && MachHeader->Signature == MACH_HEADER_SIGNATURE)
+    || (Is64Bit && MachHeader->Signature == MACH_HEADER_64_SIGNATURE)) {
     return TRUE;
   }
 
@@ -68,14 +72,16 @@ UpdateMkextLengthChecksum (
 STATIC
 BOOLEAN
 ParseMkextV2Plist (
-  IN  MKEXT_V2_HEADER *Mkext,
-  OUT UINT8           **PlistBuffer,
-  OUT XML_DOCUMENT    **PlistDoc,
-  OUT XML_NODE        **BundleArray
+  IN  MKEXT_V2_HEADER   *Mkext,
+  OUT UINT8             **Plist,
+  OUT XML_DOCUMENT      **PlistDoc,
+  OUT XML_NODE          **PlistBundles
   )
 {
   UINT8               *MkextBuffer;
   UINT32              MkextLength;
+  UINT8               *PlistBuffer;
+  XML_DOCUMENT        *PlistXml;
   UINT32              PlistOffset;
   UINT32              PlistCompressedSize;
   UINT32              PlistFullSize;
@@ -86,14 +92,11 @@ ParseMkextV2Plist (
   UINT32              MkextInfoRootIndex;
   UINT32              MkextInfoRootCount;
 
+  XML_NODE            *PlistBundleArray;
   CONST CHAR8         *BundleArrayKey;
+  
 
-  ASSERT (Mkext != NULL);
-  ASSERT (PlistBuffer != NULL);
-  ASSERT (PlistDoc != NULL);
-  ASSERT (BundleArray != NULL);
-
-  MkextBuffer         = (UINT8*)Mkext;
+  MkextBuffer         = (UINT8 *) Mkext;
   MkextLength         = SwapBytes32 (Mkext->Header.Length);
   PlistOffset         = SwapBytes32 (Mkext->PlistOffset);
   PlistCompressedSize = SwapBytes32 (Mkext->PlistCompressedSize);
@@ -108,28 +111,35 @@ ParseMkextV2Plist (
     return FALSE;
   }
 
-  //
-  // Copy/decompress plist.
-  //
-  *PlistBuffer = AllocatePool (PlistFullSize);
-  if (PlistCompressedSize > 0) {
-    DecompressZLIB (
-      (UINT8 *)* PlistBuffer, PlistFullSize,
-      &MkextBuffer[PlistOffset], PlistCompressedSize
-      );
-  } else {
-    CopyMem (*PlistBuffer, &MkextBuffer[PlistOffset], PlistFullSize);
-  }
-
-  *PlistDoc = XmlDocumentParse ((CHAR8 *)* PlistBuffer, PlistFullSize, FALSE);
-  if (*PlistDoc == NULL) {
-    FreePool (*PlistBuffer);
+  PlistBuffer = AllocatePool (PlistFullSize);
+  if (PlistBuffer == NULL) {
     return FALSE;
   }
 
-  MkextInfoRoot = PlistNodeCast (XmlDocumentRoot (*PlistDoc), PLIST_NODE_TYPE_DICT);
+  //
+  // Copy/decompress plist.
+  //
+  if (PlistCompressedSize > 0) {
+    DecompressZLIB (
+      (UINT8 *) PlistBuffer, PlistFullSize,
+      &MkextBuffer[PlistOffset], PlistCompressedSize
+      );
+  } else {
+    CopyMem (PlistBuffer, &MkextBuffer[PlistOffset], PlistFullSize);
+  }
+
+  PlistXml = XmlDocumentParse ((CHAR8 *) PlistBuffer, PlistFullSize, FALSE);
+  if (PlistXml == NULL) {
+    FreePool (PlistBuffer);
+    return FALSE;
+  }
+
+  //
+  // Mkext v2 root element is a dictionary containing an array of bundles.
+  //
+  MkextInfoRoot = PlistNodeCast (XmlDocumentRoot (PlistXml), PLIST_NODE_TYPE_DICT);
   if (MkextInfoRoot == NULL) {
-    FreePool (*PlistBuffer);
+    FreePool (PlistBuffer);
     return FALSE;
   }
 
@@ -138,8 +148,12 @@ ParseMkextV2Plist (
   //
   MkextInfoRootCount = PlistDictChildren (MkextInfoRoot);
   for (MkextInfoRootIndex = 0; MkextInfoRootIndex < MkextInfoRootCount; MkextInfoRootIndex++) {
-    BundleArrayKey = PlistKeyValue (PlistDictChild (MkextInfoRoot, MkextInfoRootIndex, BundleArray));
+    BundleArrayKey = PlistKeyValue (PlistDictChild (MkextInfoRoot, MkextInfoRootIndex, &PlistBundleArray));
     if (AsciiStrCmp (BundleArrayKey, MKEXT_INFO_DICTIONARIES_KEY) == 0) {
+      *Plist        = PlistBuffer;
+      *PlistDoc     = PlistXml;
+      *PlistBundles = PlistBundleArray;
+
       return TRUE;
     }
   }
@@ -147,7 +161,7 @@ ParseMkextV2Plist (
   //
   // No bundle array found.
   //
-  FreePool (*PlistBuffer);
+  FreePool (PlistBuffer);
   return FALSE;
 }
 
@@ -214,6 +228,17 @@ MkextGetCpuType (
   return RETURN_SUCCESS;
 }
 
+/**
+  Gets the total size of decompressed mkext plus reserved kexts.
+
+  @param[in]  Buffer            Input buffer.
+  @param[in]  BufferSize        Input buffer size.
+  @param[in]  ReservedSize      Size to reserve for future injected kexts.
+  @param[in]  NumReservedKexts  Number of kext slots to reserve for future injected kexts.
+
+  @returns  Total size or 0 on failure.
+
+**/
 UINT32
 MkextGetAllocatedSize (
   IN UINT8    *Buffer,
@@ -222,134 +247,114 @@ MkextGetAllocatedSize (
   IN UINT32   NumReservedKexts
   )
 {
-  MKEXT_HEADER_ANY  *Mkext;
-  UINT32            Length;
-  UINT32            Version;
-  UINT32            FullLength;
-  UINT32            Tmp;
+  MKEXT_HEADER_ANY    *MkextHeader;
+  UINT32              MkextSize;
+  UINT32              MkextVersion;
+  UINT32              NumKexts;
 
-  UINT32            Index;
-  UINT32            NumKexts;
-  UINT32            NumTotalKexts;
+  UINT32              MkextAllocSize;
+  UINT32              NumMaxKexts;
 
-  UINT32            PlistFullLength;
-  UINT32            BinFullLength;
+  UINT32              Index;
+  UINT32              PlistSize;
+  UINT32              BinSize;
 
-  UINT8             *MkextPlistBuffer;
-  XML_DOCUMENT      *MkextPlistDoc;
+  UINT8               *PlistBuffer;
+  XML_DOCUMENT        *PlistXml;
+  XML_NODE            *PlistBundles;
+  UINT32              PlistBundlesCount;
+  XML_NODE            *PlistBundle;
+  UINT32              PlistBundleIndex;
+  UINT32              PlistBundleCount;
+  CONST CHAR8         *PlistBundleKey;
 
-  XML_NODE          *BundleArray;
-  UINT32            BundleArrayIndex;
-  UINT32            BundleArrayCount;
-
-  XML_NODE          *BundleDictRoot;
-  CONST CHAR8       *BundleDictRootKey;
-  UINT32            BundleDictRootIndex;
-  UINT32            BundleDictRootCount;
-
-  XML_NODE          *BundleExecutable;
-  UINT32            BundleExecutableOffset;
-
+  XML_NODE            *BundleExecutable;
+  UINT32              BundleExecutableOffset;
   MKEXT_V2_FILE_ENTRY *MkextExecutableEntry;
 
   ASSERT (Buffer != NULL);
   ASSERT (BufferSize > 0);
 
   if (BufferSize < sizeof (MKEXT_CORE_HEADER)
-    || !OC_TYPE_ALIGNED (MKEXT_HEADER_ANY, Buffer)) {
+    || !OC_TYPE_ALIGNED (MKEXT_CORE_HEADER, Buffer)) {
     return 0;
   }
 
-  Mkext     = (MKEXT_HEADER_ANY*)Buffer;
-  Length    = SwapBytes32 (Mkext->Common.Length);
-  Version   = SwapBytes32 (Mkext->Common.Version);
-  NumKexts  = SwapBytes32 (Mkext->Common.NumKexts);
+  MkextHeader   = (MKEXT_HEADER_ANY *) Buffer;
+  MkextSize     = SwapBytes32 (MkextHeader->Common.Length);
+  MkextVersion  = SwapBytes32 (MkextHeader->Common.Version);
+  NumKexts      = SwapBytes32 (MkextHeader->Common.NumKexts);
 
-  if (Mkext->Common.Magic != MKEXT_INVERT_MAGIC
-    || Mkext->Common.Signature != MKEXT_INVERT_SIGNATURE
-    || Length != BufferSize) {
+  if (MkextHeader->Common.Magic != MKEXT_INVERT_MAGIC
+    || MkextHeader->Common.Signature != MKEXT_INVERT_SIGNATURE
+    || BufferSize != MkextSize
+    || OcOverflowAddU32 (NumKexts, NumReservedKexts, &NumMaxKexts)) {
     return 0;
   }
 
-  if (OcOverflowAddU32 (NumKexts, NumReservedKexts, &NumTotalKexts)) {
-    return 0;
-  }
-
-  FullLength = 0;
-  if (Version == MKEXT_VERSION_V1) {
-    FullLength = sizeof (MKEXT_V1_HEADER);
-    if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumTotalKexts, FullLength, &FullLength)) {
+  //
+  // Mkext v1.
+  //
+  if (MkextVersion == MKEXT_VERSION_V1) {
+    if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumMaxKexts, sizeof (MKEXT_V1_HEADER), &MkextAllocSize)) {
       return 0;
     }
-    FullLength = ALIGN_VALUE (FullLength, sizeof (UINT64));
+    MkextAllocSize = MKEXT_ALIGN (MkextAllocSize);
 
     for (Index = 0; Index < NumKexts; Index++) {
-      PlistFullLength = ALIGN_VALUE (SwapBytes32 (Mkext->V1.Kexts[Index].Plist.FullSize), sizeof (UINT64));
-      BinFullLength = ALIGN_VALUE (SwapBytes32 (Mkext->V1.Kexts[Index].Binary.FullSize), sizeof (UINT64));
+      PlistSize = MKEXT_ALIGN (SwapBytes32 (MkextHeader->V1.Kexts[Index].Plist.FullSize));
+      BinSize   = MKEXT_ALIGN (SwapBytes32 (MkextHeader->V1.Kexts[Index].Binary.FullSize));
 
-      if (OcOverflowTriAddU32 (FullLength, PlistFullLength, BinFullLength, &FullLength)) {
-        DEBUG ((DEBUG_INFO, "error3\n"));
+      if (OcOverflowTriAddU32 (MkextAllocSize, PlistSize, BinSize, &MkextAllocSize)) {
         return 0;
       }
     }
 
-  } else if (Version == MKEXT_VERSION_V2) {
-    PlistFullLength = SwapBytes32 (Mkext->V2.PlistFullSize);
-    if (OcOverflowAddU32 (sizeof (MKEXT_V2_HEADER), PlistFullLength, &FullLength)) {
-      return 0;
-    }
-
-    if (!ParseMkextV2Plist (
-      &Mkext->V2,
-      &MkextPlistBuffer,
-      &MkextPlistDoc,
-      &BundleArray
-      )) {
-      return 0;
-    }
-
+  //
+  // Mkext v2.
+  //
+  } else if (MkextVersion == MKEXT_VERSION_V2) {
     //
-    // Account for binary headers.
+    // Account for size of header.
     //
-    if (OcOverflowMulAddU32 (NumReservedKexts, sizeof (MKEXT_V2_FILE_ENTRY), FullLength, &FullLength)) {
-      FreePool (MkextPlistBuffer);
+    MkextAllocSize = MKEXT_ALIGN (sizeof (MKEXT_V2_HEADER));
+    if (!ParseMkextV2Plist (&MkextHeader->V2, &PlistBuffer, &PlistXml, &PlistBundles)) {
       return 0;
     }
 
     //
-    // Enumerate bundle dicts.
+    // Enumerate bundles.
     //
-    BundleArrayCount = XmlNodeChildren (BundleArray);
-    for (BundleArrayIndex = 0; BundleArrayIndex < BundleArrayCount; BundleArrayIndex++) {
-      BundleDictRoot = PlistNodeCast (XmlNodeChild (BundleArray, BundleArrayIndex), PLIST_NODE_TYPE_DICT);
-      if (BundleDictRoot == NULL) {
-        FreePool (MkextPlistBuffer);
+    PlistBundlesCount = XmlNodeChildren (PlistBundles);
+    for (Index = 0; Index < PlistBundlesCount; Index++) {
+      PlistBundle = PlistNodeCast (XmlNodeChild (PlistBundles, Index), PLIST_NODE_TYPE_DICT);
+      if (PlistBundle == NULL) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
         return 0;
       }
 
-      BundleDictRootCount = PlistDictChildren (BundleDictRoot);
-      for (BundleDictRootIndex = 0; BundleDictRootIndex < BundleDictRootCount; BundleDictRootIndex++) {
-        BundleDictRootKey = PlistKeyValue (PlistDictChild (BundleDictRoot, BundleDictRootIndex, &BundleExecutable));
-        if (AsciiStrCmp (BundleDictRootKey, MKEXT_EXECUTABLE_KEY) == 0) {
+      //
+      // Determine executable size, if present.
+      //
+      PlistBundleCount = PlistDictChildren (PlistBundle);
+      for (PlistBundleIndex = 0; PlistBundleIndex < PlistBundleCount; PlistBundleIndex++) {
+        PlistBundleKey = PlistKeyValue (PlistDictChild (PlistBundle, PlistBundleIndex, &BundleExecutable));
+        if (AsciiStrCmp (PlistBundleKey, MKEXT_EXECUTABLE_KEY) == 0) {
           if (!PlistIntegerValue (BundleExecutable, &BundleExecutableOffset, sizeof (BundleExecutableOffset), TRUE)
-            || BundleExecutableOffset == 0) {
-            FreePool (MkextPlistBuffer);
+            || BundleExecutableOffset == 0
+            || BundleExecutableOffset > MkextSize - sizeof (MKEXT_V2_FILE_ENTRY)) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
             return 0;
           }
 
-          //DEBUG ((DEBUG_INFO, "Got executable @ 0x%X\n", BundleExecutableOffset));
+          MkextExecutableEntry  = (MKEXT_V2_FILE_ENTRY *) &Buffer[BundleExecutableOffset];
+          BinSize               = SwapBytes32 (MkextExecutableEntry->FullSize);
 
-          // Add 128 bytes to account for string changes during decomp.
-          if (OcOverflowTriAddU32 (BundleExecutableOffset, 128, sizeof (MKEXT_V2_FILE_ENTRY), &Tmp) || Tmp > Length) {
-            FreePool (MkextPlistBuffer);
-            return 0;
-          }
-
-          MkextExecutableEntry = (MKEXT_V2_FILE_ENTRY*)&Buffer[BundleExecutableOffset];
-          BinFullLength = SwapBytes32 (MkextExecutableEntry->FullSize);
-          if (OcOverflowAddU32 (FullLength, BinFullLength, &FullLength)) {
-            DEBUG ((DEBUG_INFO, "error3\n"));
-            FreePool (MkextPlistBuffer);
+          if (OcOverflowTriAddU32 (MkextAllocSize, sizeof (MKEXT_V2_FILE_ENTRY), MKEXT_ALIGN (BinSize), &MkextAllocSize)) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
             return 0;
           }
 
@@ -357,17 +362,32 @@ MkextGetAllocatedSize (
         }
       }
     }
+
+    XmlDocumentFree (PlistXml);
+    FreePool (PlistBuffer);
+
+    //
+    // Account for plist, 128 bytes per bundle for future plist expansion, 
+    //   and additional headers for future kext injection.
+    //
+    PlistSize = SwapBytes32 (MkextHeader->V2.PlistFullSize);
+    if (OcOverflowAddU32 (MkextAllocSize, PlistSize, &MkextAllocSize)
+      || OcOverflowMulAddU32 (PlistBundlesCount, 128, MkextAllocSize, &MkextAllocSize)
+      || OcOverflowMulAddU32 (NumReservedKexts, sizeof (MKEXT_V2_FILE_ENTRY), MkextAllocSize, &MkextAllocSize)) {
+      return 0;
+    }
+
+  //
+  // Unsupported version.
+  //
   } else {
-    //
-    // Unsupported version.
-    //
     return 0;
   }
 
-  if (OcOverflowAddU32 (FullLength, ReservedSize, &FullLength)) {
+  if (OcOverflowAddU32 (MkextAllocSize, ReservedSize, &MkextAllocSize)) {
     return 0;
   }
-  return FullLength;
+  return MkextAllocSize;
 }
 
 RETURN_STATUS
@@ -380,285 +400,308 @@ MkextDecompress (
   OUT    UINT32   *OutMkextSize
   )
 {
-  MKEXT_HEADER_ANY  *Mkext;
-  UINT32            Length;
-  UINT32            Version;
-  UINT32            Tmp;
+  MKEXT_HEADER_ANY      *MkextHeader;
+  MKEXT_HEADER_ANY      *MkextHeaderOut;
+  UINT32                MkextSize;
+  UINT32                MkextVersion;
+  UINT32                NumKexts;
+  UINT32                NumMaxKexts;
 
-  UINT32            Index;
-  UINT32            NumKexts;
-  UINT32            NumTotalKexts;
-  UINT32            PlistOffset;
-  UINT32            PlistCompLength;
-  UINT32            PlistFullLength;
-  UINT32            BinOffset;
-  UINT32            BinCompLength;
-  UINT32            BinFullLength;
+  UINT32                Tmp;
+  UINT32                Index;
+  UINT32                CurrentOffset;
+  UINT32                NewOffset;
+  UINT32                PlistOffset;
+  UINT32                PlistCompSize;
+  UINT32                PlistFullSize;
+  UINT32                BinOffset;
+  UINT32                BinCompSize;
+  UINT32                BinFullSize;
 
-  MKEXT_HEADER_ANY  *MkextOut;
+  UINT8                 *PlistBuffer;
+  XML_DOCUMENT          *PlistXml;
+  XML_NODE              *PlistBundles;
+  UINT32                PlistBundlesCount;
+  XML_NODE              *PlistBundle;
+  UINT32                PlistBundleIndex;
+  UINT32                PlistBundleCount;
+  CONST CHAR8           *PlistBundleKey;
+  XML_NODE              *BundleExecutable;
 
-  UINT32            CurrentOffset;
-
-  UINT8             *MkextPlistBuffer;
-  XML_DOCUMENT      *MkextPlistDoc;
-
-  XML_NODE          *BundleArray;
-  UINT32            BundleArrayIndex;
-  UINT32            BundleArrayCount;
-
-  XML_NODE          *BundleDictRoot;
-  CONST CHAR8       *BundleDictRootKey;
-  UINT32            BundleDictRootIndex;
-  UINT32            BundleDictRootCount;
-
-  XML_NODE          *BundleExecutable;
-  UINT32            BundleExecutableOffset;
-
-  MKEXT_V2_FILE_ENTRY *MkextExecutableEntry;
-  MKEXT_V2_FILE_ENTRY *MkextOutExecutableEntry;
-
-  CHAR8             *ExecutableSourceAddrStrBuffer;
-
-  UINT32            MkextPlistSize;
-
-
-
+  MKEXT_V2_FILE_ENTRY   *MkextExecutableEntry;
+  MKEXT_V2_FILE_ENTRY   *MkextOutExecutableEntry;
+  CHAR8                 *BinaryOffsetStrings;
+  UINT32                BinaryOffsetStringsSize;
   
 
   ASSERT (Buffer != NULL);
   ASSERT (BufferSize > 0);
   ASSERT (OutBuffer != NULL);
-  ASSERT (OutBufferSize > 0);
+  ASSERT (OutBufferSize >= BufferSize);
   ASSERT (OutMkextSize != NULL);
 
   if (BufferSize < sizeof (MKEXT_CORE_HEADER)
-    || !OC_TYPE_ALIGNED (MKEXT_HEADER_ANY, Buffer)) {
-      DEBUG ((DEBUG_INFO, "error mkext decomp 1\n"));
+    || !OC_TYPE_ALIGNED (MKEXT_CORE_HEADER, Buffer)) {
     return RETURN_INVALID_PARAMETER;
   }
 
-  Mkext     = (MKEXT_HEADER_ANY*)Buffer;
-  Length    = SwapBytes32 (Mkext->Common.Length);
-  Version   = SwapBytes32 (Mkext->Common.Version);
-  NumKexts  = SwapBytes32 (Mkext->Common.NumKexts);
+  MkextHeader   = (MKEXT_HEADER_ANY *) Buffer;
+  MkextSize     = SwapBytes32 (MkextHeader->Common.Length);
+  MkextVersion  = SwapBytes32 (MkextHeader->Common.Version);
+  NumKexts      = SwapBytes32 (MkextHeader->Common.NumKexts);
 
-  if (Mkext->Common.Magic != MKEXT_INVERT_MAGIC
-    || Mkext->Common.Signature != MKEXT_INVERT_SIGNATURE
-    || Length != BufferSize) {
-      DEBUG ((DEBUG_INFO, "error mkext decomp 2\n"));
-    return RETURN_INVALID_PARAMETER;
-  }
-
-  if (OcOverflowAddU32 (NumKexts, NumReservedKexts, &NumTotalKexts)) {
-    DEBUG ((DEBUG_INFO, "error mkext decomp 3\n"));
+  if (MkextHeader->Common.Magic != MKEXT_INVERT_MAGIC
+    || MkextHeader->Common.Signature != MKEXT_INVERT_SIGNATURE
+    || BufferSize != MkextSize
+    || OcOverflowAddU32 (NumKexts, NumReservedKexts, &NumMaxKexts)) {
     return RETURN_INVALID_PARAMETER;
   }
 
   //
   // Mkext v1.
   //
-  if (Version == MKEXT_VERSION_V1) {
-    CopyMem (OutBuffer, Buffer, sizeof (MKEXT_V1_HEADER));
-    MkextOut = (MKEXT_HEADER_ANY*)OutBuffer;
-    if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumTotalKexts, sizeof (MKEXT_V1_HEADER), &CurrentOffset)
-      || CurrentOffset > OutBufferSize) {
-        DEBUG ((DEBUG_INFO, "error mkext decomp 4\n"));
+  if (MkextVersion == MKEXT_VERSION_V1) {
+    if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumMaxKexts, sizeof (MKEXT_V1_HEADER), &CurrentOffset)) {
       return RETURN_INVALID_PARAMETER;
     }
-    CurrentOffset = ALIGN_VALUE (CurrentOffset, sizeof (UINT64));
+    CurrentOffset = MKEXT_ALIGN (CurrentOffset);
 
+    //
+    // Copy header.
+    //
+    CopyMem (OutBuffer, Buffer, sizeof (MKEXT_V1_HEADER));
+    MkextHeaderOut = (MKEXT_HEADER_ANY *) OutBuffer;
+
+    //
+    // Copy plists and binaries if present, decompressing as needed.
+    //
     for (Index = 0; Index < NumKexts; Index++) {
-      PlistOffset     = SwapBytes32 (Mkext->V1.Kexts[Index].Plist.Offset);
-      PlistCompLength = SwapBytes32 (Mkext->V1.Kexts[Index].Plist.CompressedSize);
-      PlistFullLength = SwapBytes32 (Mkext->V1.Kexts[Index].Plist.FullSize);
+      PlistOffset     = SwapBytes32 (MkextHeader->V1.Kexts[Index].Plist.Offset);
+      PlistCompSize   = SwapBytes32 (MkextHeader->V1.Kexts[Index].Plist.CompressedSize);
+      PlistFullSize   = SwapBytes32 (MkextHeader->V1.Kexts[Index].Plist.FullSize);
+      BinOffset       = SwapBytes32 (MkextHeader->V1.Kexts[Index].Binary.Offset);
+      BinCompSize     = SwapBytes32 (MkextHeader->V1.Kexts[Index].Binary.CompressedSize);
+      BinFullSize     = SwapBytes32 (MkextHeader->V1.Kexts[Index].Binary.FullSize);
 
-      BinOffset       = SwapBytes32 (Mkext->V1.Kexts[Index].Binary.Offset);
-      BinCompLength   = SwapBytes32 (Mkext->V1.Kexts[Index].Binary.CompressedSize);
-      BinFullLength   = SwapBytes32 (Mkext->V1.Kexts[Index].Binary.FullSize);
+      if (CurrentOffset > OutBufferSize) {
+        return RETURN_BUFFER_TOO_SMALL;
+      }
 
-      if (PlistCompLength > 0) {
-        if (DecompressLZSS (&OutBuffer[CurrentOffset], PlistFullLength, &Buffer[PlistOffset], PlistCompLength) != PlistFullLength) {
-          DEBUG ((DEBUG_INFO, "error mkext decomp 5\n"));
+      //
+      // Compressed size == 0 means no compression.
+      //
+      if (PlistCompSize > 0) {
+        if (OcOverflowAddU32 (PlistOffset, PlistCompSize, &Tmp)
+          || Tmp > MkextSize
+          || DecompressLZSS (
+            &OutBuffer[CurrentOffset],
+            PlistFullSize,
+            &Buffer[PlistOffset],
+            PlistCompSize
+          ) != PlistFullSize) {
           return RETURN_INVALID_PARAMETER;
         }
       } else {
-        CopyMem (&OutBuffer[CurrentOffset], &Buffer[PlistOffset], PlistFullLength);
+        if (OcOverflowAddU32 (PlistOffset, PlistFullSize, &Tmp)
+          || Tmp > MkextSize) {
+          return RETURN_INVALID_PARAMETER;
+        }
+        CopyMem (&OutBuffer[CurrentOffset], &Buffer[PlistOffset], PlistFullSize);
       }
 
-     // DEBUG ((DEBUG_INFO, "Current offset before plist 0x%X\n", CurrentOffset));
-      MkextOut->V1.Kexts[Index].Plist.Offset = SwapBytes32 (CurrentOffset);
-      MkextOut->V1.Kexts[Index].Plist.CompressedSize = 0;
-      MkextOut->V1.Kexts[Index].Plist.FullSize = SwapBytes32 (PlistFullLength);
-      MkextOut->V1.Kexts[Index].Plist.ModifiedSeconds = Mkext->V1.Kexts[Index].Plist.ModifiedSeconds;
-      if (OcOverflowAddU32 (CurrentOffset, ALIGN_VALUE (PlistFullLength, sizeof (UINT64)), &CurrentOffset)) {
-        DEBUG ((DEBUG_INFO, "error mkext decomp 6\n"));
+      MkextHeaderOut->V1.Kexts[Index].Plist.Offset          = SwapBytes32 (CurrentOffset);
+      MkextHeaderOut->V1.Kexts[Index].Plist.CompressedSize  = 0;
+      MkextHeaderOut->V1.Kexts[Index].Plist.FullSize        = SwapBytes32 (PlistFullSize);
+      MkextHeaderOut->V1.Kexts[Index].Plist.ModifiedSeconds = MkextHeader->V1.Kexts[Index].Plist.ModifiedSeconds;
+      if (OcOverflowAddU32 (CurrentOffset, MKEXT_ALIGN (PlistFullSize), &CurrentOffset)) {
         return RETURN_INVALID_PARAMETER;
       }
-      
 
-      //DEBUG ((DEBUG_INFO, "Current offset before bin 0x%X\n", CurrentOffset));
-      if (BinFullLength > 0) {
-        if (BinCompLength > 0) {
-          if (DecompressLZSS (&OutBuffer[CurrentOffset], BinFullLength, &Buffer[BinOffset], BinCompLength) != BinFullLength) {
-            DEBUG ((DEBUG_INFO, "error mkext decomp 7\n"));
+      if (BinFullSize > 0) {
+        if (CurrentOffset > OutBufferSize) {
+          return RETURN_BUFFER_TOO_SMALL;
+        }
+
+        //
+        // Compressed size == 0 means no compression.
+        //
+        if (BinCompSize > 0) {
+          if (OcOverflowAddU32 (BinOffset, BinCompSize, &Tmp)
+            || Tmp > MkextSize
+            || DecompressLZSS (
+              &OutBuffer[CurrentOffset],
+              BinFullSize,
+              &Buffer[BinOffset],
+              BinCompSize
+            ) != BinFullSize) {
             return RETURN_INVALID_PARAMETER;
           }
         } else {
-          CopyMem (&OutBuffer[CurrentOffset], &Buffer[BinOffset], BinFullLength);
+          if (OcOverflowAddU32 (BinOffset, BinFullSize, &Tmp)
+            || Tmp > MkextSize) {
+            return RETURN_INVALID_PARAMETER;
+          }
+          CopyMem (&OutBuffer[CurrentOffset], &Buffer[BinOffset], BinFullSize);
         }
-        
 
-        MkextOut->V1.Kexts[Index].Binary.Offset = SwapBytes32 (CurrentOffset);
-        MkextOut->V1.Kexts[Index].Binary.CompressedSize = 0;
-        MkextOut->V1.Kexts[Index].Binary.FullSize = SwapBytes32 (BinFullLength);
-        MkextOut->V1.Kexts[Index].Binary.ModifiedSeconds = Mkext->V1.Kexts[Index].Binary.ModifiedSeconds;
-        if (OcOverflowAddU32 (CurrentOffset, ALIGN_VALUE (BinFullLength, sizeof (UINT64)), &CurrentOffset)) {
-          DEBUG ((DEBUG_INFO, "error mkext decomp 8\n"));
+        MkextHeaderOut->V1.Kexts[Index].Binary.Offset           = SwapBytes32 (CurrentOffset);
+        MkextHeaderOut->V1.Kexts[Index].Binary.CompressedSize   = 0;
+        MkextHeaderOut->V1.Kexts[Index].Binary.FullSize         = SwapBytes32 (BinFullSize);
+        MkextHeaderOut->V1.Kexts[Index].Binary.ModifiedSeconds  = MkextHeader->V1.Kexts[Index].Binary.ModifiedSeconds;
+        if (OcOverflowAddU32 (CurrentOffset, MKEXT_ALIGN (BinFullSize), &CurrentOffset)) {
           return RETURN_INVALID_PARAMETER;
         }
       } else {
-        MkextOut->V1.Kexts[Index].Binary.Offset = 0;
-        MkextOut->V1.Kexts[Index].Binary.CompressedSize = 0;
-        MkextOut->V1.Kexts[Index].Binary.FullSize = 0;
-        MkextOut->V1.Kexts[Index].Binary.ModifiedSeconds = 0;
+        ZeroMem (&MkextHeaderOut->V1.Kexts[Index].Binary, sizeof (MKEXT_V1_KEXT_FILE));
       }
     }
 
-    DEBUG ((DEBUG_INFO, "final offset 0x%X\n", CurrentOffset));
     *OutMkextSize = CurrentOffset;
-    UpdateMkextLengthChecksum (MkextOut, *OutMkextSize);
-    
-    return RETURN_SUCCESS;
 
   //
   // Mkext v2.
   //
-  } else if (Version == MKEXT_VERSION_V2) {
+  } else if (MkextVersion == MKEXT_VERSION_V2) {
+    //
+    // Copy header.
+    //
     CopyMem (OutBuffer, Buffer, sizeof (MKEXT_V2_HEADER));
-    MkextOut = (MKEXT_HEADER_ANY*)OutBuffer;
-    CurrentOffset = sizeof (MKEXT_V2_HEADER);
+    MkextHeaderOut = (MKEXT_HEADER_ANY *) OutBuffer;
+    CurrentOffset = MKEXT_ALIGN (sizeof (MKEXT_V2_HEADER));
 
-    if (!ParseMkextV2Plist (
-      &Mkext->V2,
-      &MkextPlistBuffer,
-      &MkextPlistDoc,
-      &BundleArray
-      )) {
+    if (!ParseMkextV2Plist (&MkextHeader->V2, &PlistBuffer, &PlistXml, &PlistBundles)) {
       return RETURN_INVALID_PARAMETER;
     }
 
-    BundleArrayCount = XmlNodeChildren (BundleArray);
-    if (OcOverflowTriMulU32 (BundleArrayCount, MKEXT_OFFSET_STR_LEN, sizeof (CHAR8), &Tmp)) {
-      XmlDocumentFree (MkextPlistDoc);
-      FreePool (MkextPlistBuffer);
+    //
+    // All offset strings are kept in array until the plist is regenerated.
+    //
+    PlistBundlesCount = XmlNodeChildren (PlistBundles);
+    if (OcOverflowTriMulU32 (PlistBundlesCount, MKEXT_OFFSET_STR_LEN, sizeof (CHAR8), &BinaryOffsetStringsSize)) {
+      XmlDocumentFree (PlistXml);
+      FreePool (PlistBuffer);
       return RETURN_INVALID_PARAMETER;
     }
-    ExecutableSourceAddrStrBuffer = AllocateZeroPool (Tmp);
+    BinaryOffsetStrings = AllocateZeroPool (BinaryOffsetStringsSize);
 
     //
-    // Enumerate bundle dicts.
+    // Enumerate bundles.
     //
-    for (BundleArrayIndex = 0; BundleArrayIndex < BundleArrayCount; BundleArrayIndex++) {
-      BundleDictRoot = PlistNodeCast (XmlNodeChild (BundleArray, BundleArrayIndex), PLIST_NODE_TYPE_DICT);
-      if (BundleDictRoot == NULL) {
-        XmlDocumentFree (MkextPlistDoc);
-        FreePool (MkextPlistBuffer);
-        FreePool (ExecutableSourceAddrStrBuffer);
+    for (Index = 0; Index < PlistBundlesCount; Index++) {
+      PlistBundle = PlistNodeCast (XmlNodeChild (PlistBundles, Index), PLIST_NODE_TYPE_DICT);
+      if (PlistBundle == NULL) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
+        FreePool (BinaryOffsetStrings);
         return RETURN_INVALID_PARAMETER;
       }
 
-      BundleDictRootCount = PlistDictChildren (BundleDictRoot);
-      for (BundleDictRootIndex = 0; BundleDictRootIndex < BundleDictRootCount; BundleDictRootIndex++) {
-        BundleDictRootKey = PlistKeyValue (PlistDictChild (BundleDictRoot, BundleDictRootIndex, &BundleExecutable));
-        if (AsciiStrCmp (BundleDictRootKey, MKEXT_EXECUTABLE_KEY) == 0) {
-          if (!PlistIntegerValue (BundleExecutable, &BundleExecutableOffset, sizeof (BundleExecutableOffset), TRUE)
-            || BundleExecutableOffset == 0) {
-            XmlDocumentFree (MkextPlistDoc);
-            FreePool (MkextPlistBuffer);
-            FreePool (ExecutableSourceAddrStrBuffer);
+      //
+      // Get executable information, if present.
+      //
+      PlistBundleCount = PlistDictChildren (PlistBundle);
+      for (PlistBundleIndex = 0; PlistBundleIndex < PlistBundleCount; PlistBundleIndex++) {
+        PlistBundleKey = PlistKeyValue (PlistDictChild (PlistBundle, PlistBundleIndex, &BundleExecutable));
+        if (AsciiStrCmp (PlistBundleKey, MKEXT_EXECUTABLE_KEY) == 0) {
+          if (!PlistIntegerValue (BundleExecutable, &BinOffset, sizeof (BinOffset), TRUE)
+            || BinOffset == 0) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+            FreePool (BinaryOffsetStrings);
             return RETURN_INVALID_PARAMETER;
           }
 
-          //DEBUG ((DEBUG_INFO, "Got executable @ 0x%X\n", BundleExecutableOffset));
-
-          if (OcOverflowAddU32 (BundleExecutableOffset, sizeof (MKEXT_V2_FILE_ENTRY), &Tmp) || Tmp > Length) {
-            XmlDocumentFree (MkextPlistDoc);
-            FreePool (MkextPlistBuffer);
-            FreePool (ExecutableSourceAddrStrBuffer);
-            return RETURN_INVALID_PARAMETER;
-          }
-
-          MkextExecutableEntry = (MKEXT_V2_FILE_ENTRY*)&Buffer[BundleExecutableOffset];
-          BinCompLength = SwapBytes32 (MkextExecutableEntry->CompressedSize);
-          BinFullLength = SwapBytes32 (MkextExecutableEntry->FullSize);
+          MkextExecutableEntry  = (MKEXT_V2_FILE_ENTRY *) &Buffer[BinOffset];
+          BinCompSize           = SwapBytes32 (MkextExecutableEntry->CompressedSize);
+          BinFullSize           = SwapBytes32 (MkextExecutableEntry->FullSize);
 
           //
           // Unknown if this would ever actually happen, but ignore zero-length binaries.
           //
-          if (BinFullLength == 0) {
+          if (BinFullSize == 0) {
             break;
           }
 
+          if (OcOverflowTriAddU32 (CurrentOffset, sizeof (MKEXT_V2_FILE_ENTRY), MKEXT_ALIGN (BinFullSize), &NewOffset)
+            || NewOffset > OutBufferSize) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+            FreePool (BinaryOffsetStrings);
+            return RETURN_BUFFER_TOO_SMALL;
+          }
           
-          MkextOutExecutableEntry = (MKEXT_V2_FILE_ENTRY*)&OutBuffer[CurrentOffset];
+          MkextOutExecutableEntry                 = (MKEXT_V2_FILE_ENTRY *) &OutBuffer[CurrentOffset];
           MkextOutExecutableEntry->CompressedSize = 0;
-          MkextOutExecutableEntry->FullSize = SwapBytes32 (BinFullLength);
+          MkextOutExecutableEntry->FullSize       = SwapBytes32 (BinFullSize);
 
-          if (BinCompLength > 0) {
-            if (DecompressZLIB (MkextOutExecutableEntry->Data, BinFullLength, MkextExecutableEntry->Data, BinCompLength) != BinFullLength) {
-              XmlDocumentFree (MkextPlistDoc);
-              FreePool (MkextPlistBuffer);
-              FreePool (ExecutableSourceAddrStrBuffer);
+          //
+          // Compressed size == 0 means no compression.
+          //
+          if (BinCompSize > 0) {
+            if (OcOverflowAddU32 (BinOffset, BinCompSize, &Tmp)
+              || Tmp > MkextSize - sizeof (MKEXT_V2_FILE_ENTRY)
+              || DecompressZLIB (
+                MkextOutExecutableEntry->Data,
+                BinFullSize,
+                MkextExecutableEntry->Data,
+                BinCompSize
+              ) != BinFullSize) {
+              XmlDocumentFree (PlistXml);
+              FreePool (PlistBuffer);
+              FreePool (BinaryOffsetStrings);
               return RETURN_INVALID_PARAMETER;
             }
           } else {
-            CopyMem (MkextOutExecutableEntry->Data, MkextExecutableEntry->Data, BinFullLength);
+            if (OcOverflowAddU32 (BinOffset, BinFullSize, &Tmp)
+              || Tmp > MkextSize - sizeof (MKEXT_V2_FILE_ENTRY)) {
+              XmlDocumentFree (PlistXml);
+              FreePool (PlistBuffer);
+              FreePool (BinaryOffsetStrings);
+              return RETURN_INVALID_PARAMETER;
+            }
+            CopyMem (MkextOutExecutableEntry->Data, MkextExecutableEntry->Data, BinFullSize);
           }
 
           if (!AsciiUint64ToLowerHex (
-            &ExecutableSourceAddrStrBuffer[BundleArrayIndex * MKEXT_OFFSET_STR_LEN],
+            &BinaryOffsetStrings[Index * MKEXT_OFFSET_STR_LEN],
             MKEXT_OFFSET_STR_LEN,
             CurrentOffset
             )) {
-            XmlDocumentFree (MkextPlistDoc);
-            FreePool (MkextPlistBuffer);
-            FreePool (ExecutableSourceAddrStrBuffer);
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+            FreePool (BinaryOffsetStrings);
             return RETURN_INVALID_PARAMETER;
           }
-          XmlNodeChangeContent (BundleExecutable, &ExecutableSourceAddrStrBuffer[BundleArrayIndex * MKEXT_OFFSET_STR_LEN]);
-          
+          XmlNodeChangeContent (BundleExecutable, &BinaryOffsetStrings[Index * MKEXT_OFFSET_STR_LEN]);
+
           //
-          // Move to next bundle dict.
+          // Move to next bundle.
           //
-          if (OcOverflowTriAddU32 (CurrentOffset, sizeof (MKEXT_V2_FILE_ENTRY), BinFullLength, &CurrentOffset)) {
-            XmlDocumentFree (MkextPlistDoc);
-            FreePool (MkextPlistBuffer);
-            FreePool (ExecutableSourceAddrStrBuffer);
-            return RETURN_INVALID_PARAMETER;
-          }
+          CurrentOffset = NewOffset;
           break;
         }
       }
     }
 
-    MkextPlistSize = UpdateMkextV2Plist (&MkextOut->V2, MkextPlistDoc, CurrentOffset);
-    XmlDocumentFree (MkextPlistDoc);
-    FreePool (MkextPlistBuffer);
-    FreePool (ExecutableSourceAddrStrBuffer);
+    PlistFullSize = UpdateMkextV2Plist (&MkextHeaderOut->V2, PlistXml, CurrentOffset);
+    XmlDocumentFree (PlistXml);
+    FreePool (PlistBuffer);
+    FreePool (BinaryOffsetStrings);
 
-    if (MkextPlistSize == 0) {
+    if (PlistFullSize == 0
+      || OcOverflowAddU32 (CurrentOffset, PlistFullSize, OutMkextSize)) {
       return RETURN_INVALID_PARAMETER;
     }
-
-    *OutMkextSize = CurrentOffset + MkextPlistSize;
-    UpdateMkextLengthChecksum (MkextOut, *OutMkextSize);
-    return RETURN_SUCCESS;
-  }
 
   //
   // Unsupported version.
   //
-  return RETURN_UNSUPPORTED;
+  } else {
+    return RETURN_UNSUPPORTED;
+  }
+
+  UpdateMkextLengthChecksum (MkextHeaderOut, *OutMkextSize);
+  return RETURN_SUCCESS;
 }
 
 RETURN_STATUS
@@ -669,24 +712,34 @@ MkextContextInit (
   IN      UINT32             MkextAllocSize
   )
 {
-  UINT32              BundleArrayCount;
-  UINT32              BundleArrayIndex;
+  MKEXT_HEADER_ANY    *MkextHeader;
+  UINT32              MkextVersion;
+  MACH_CPU_TYPE       CpuType;
+  BOOLEAN             Is64Bit;
+  UINT32              NumKexts;
+  UINT32              NumMaxKexts;
 
-  XML_NODE            *BundleDictRoot;
-  CONST CHAR8         *BundleDictRootKey;
-  UINT32              BundleDictRootIndex;
-  UINT32              BundleDictRootCount;
-
-  XML_NODE            *BundleExecutable;
-  UINT32              BundleExecutableOffset;
-
+  UINT32              Tmp;
   UINT32              Index;
   UINT32              StartingOffset;
   UINT32              CurrentOffset;
 
+  UINT8               *PlistBuffer;
+  XML_DOCUMENT        *PlistXml;
+  UINT32              PlistOffset;
+  XML_NODE            *PlistBundles;
+  UINT32              PlistBundlesCount;
+  XML_NODE            *PlistBundle;
+  UINT32              PlistBundleIndex;
+  UINT32              PlistBundleCount;
+  CONST CHAR8         *PlistBundleKey;
+  XML_NODE            *BundleExecutable;
+  UINT32              BinOffset;
+
   //
   // Assumptions:
-  //    Kexts are fully decompressed with plist (for v2) at end of mkext.
+  //    Kexts are fully decompressed and aligned to 8 bytes with plist (for v2) at end of mkext.
+  //    Mkext is big-endian per XNU requirements.
   //
 
   ASSERT (Context != NULL);
@@ -694,114 +747,150 @@ MkextContextInit (
   ASSERT (MkextSize > 0);
   ASSERT (MkextAllocSize >= MkextSize);
 
-
   if (MkextSize < sizeof (MKEXT_CORE_HEADER)
-    || !OC_TYPE_ALIGNED (MKEXT_HEADER_ANY, Mkext)) {
+    || !OC_TYPE_ALIGNED (MKEXT_CORE_HEADER, Mkext)) {
     return RETURN_INVALID_PARAMETER;
   }
 
-  ZeroMem (Context, sizeof (MKEXT_CONTEXT));
-  Context->Mkext          = Mkext;
-  Context->MkextHeader    = (MKEXT_HEADER_ANY*)Mkext;
+  MkextHeader   = (MKEXT_HEADER_ANY *) Mkext;
+  MkextVersion  = SwapBytes32 (MkextHeader->Common.Version);
+  NumKexts      = SwapBytes32 (MkextHeader->Common.NumKexts);
+  CpuType       = SwapBytes32 (MkextHeader->Common.CpuType);
 
-  if (Context->MkextHeader->Common.Magic != MKEXT_INVERT_MAGIC
-    || Context->MkextHeader->Common.Signature != MKEXT_INVERT_SIGNATURE) {
+  if (MkextHeader->Common.Magic != MKEXT_INVERT_MAGIC
+    || MkextHeader->Common.Signature != MKEXT_INVERT_SIGNATURE
+    || MkextSize != SwapBytes32 (MkextHeader->Common.Length)) {
     return RETURN_INVALID_PARAMETER;
   }
 
-  Context->MkextSize      = SwapBytes32 (Context->MkextHeader->Common.Length);
-  if (MkextSize != Context->MkextSize) {
-    return RETURN_INVALID_PARAMETER;
+  if (CpuType == MachCpuTypeI386) {
+    Is64Bit = FALSE;
+  } else if (CpuType == MachCpuTypeX8664) {
+    Is64Bit = TRUE;
+  } else {
+    return RETURN_UNSUPPORTED;
   }
-
-  Context->MkextAllocSize = MkextAllocSize;
-  Context->NumKexts       = SwapBytes32 (Context->MkextHeader->Common.NumKexts);
-  Context->CpuType        = SwapBytes32 (Context->MkextHeader->Common.CpuType);
-  Context->MkextVersion   = SwapBytes32 (Context->MkextHeader->Common.Version);
 
   //
   // Mkext v1.
   //
-  if (Context->MkextVersion == MKEXT_VERSION_V1) {
+  if (MkextVersion == MKEXT_VERSION_V1) {
     //
-    // Calculate available kext slots.
+    // Calculate available kext slots. This value is assumed to be under the UINT32 max later on.
+    //
+    // Below finds the lowest offset to a plist or a binary, which is used to locate
+    // the end of the usable space allocated for kext slots.
     //
     StartingOffset = 0;
-    for (Index = 0; Index < Context->NumKexts; Index++) {
-      CurrentOffset = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.Offset);
+    for (Index = 0; Index < NumKexts; Index++) {
+      CurrentOffset = SwapBytes32 (MkextHeader->V1.Kexts[Index].Plist.Offset);
+      if (MkextHeader->V1.Kexts[Index].Plist.CompressedSize != 0) {
+        return RETURN_UNSUPPORTED;
+      }
       if (StartingOffset == 0 || CurrentOffset < StartingOffset) {
-        DEBUG ((DEBUG_INFO, "new offset 0x%X\n", CurrentOffset));
         StartingOffset = CurrentOffset;
       }
 
-      if (Context->MkextHeader->V1.Kexts[Index].Binary.FullSize > 0) {
-        CurrentOffset = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.Offset);
-        if (StartingOffset == 0 || CurrentOffset < StartingOffset) {
-          DEBUG ((DEBUG_INFO, "new offset 0x%X\n", CurrentOffset));
+      //
+      // A binary entry of zero size indicates no binary is present.
+      //
+      if (MkextHeader->V1.Kexts[Index].Binary.FullSize > 0) {
+        CurrentOffset = SwapBytes32 (MkextHeader->V1.Kexts[Index].Binary.Offset);
+        if (MkextHeader->V1.Kexts[Index].Binary.CompressedSize != 0) {
+          return RETURN_UNSUPPORTED;
+        }
+        if (CurrentOffset < StartingOffset) {
           StartingOffset = CurrentOffset;
         }
       }
     }
 
-    Context->NumMaxKexts =
-      (StartingOffset - (sizeof (MKEXT_V1_HEADER) + (sizeof (MKEXT_V1_KEXT) * Context->NumKexts)))
-      / sizeof (MKEXT_V1_KEXT) + Context->NumKexts;
-    DEBUG ((DEBUG_INFO, "max kext slots %u\n", Context->NumMaxKexts));
-    DEBUG ((DEBUG_INFO, "start offset 0x%X\n", StartingOffset));
+    if (OcOverflowMulAddU32 (sizeof (MKEXT_V1_KEXT), NumKexts, sizeof (MKEXT_V1_HEADER), &Tmp)
+      || StartingOffset < Tmp
+      || StartingOffset > MkextSize) {
+      return RETURN_INVALID_PARAMETER;
+    }
 
-    return RETURN_SUCCESS;
+    Tmp = (StartingOffset - Tmp) / sizeof (MKEXT_V1_KEXT);
+    if (OcOverflowAddU32 (Tmp, NumKexts, &NumMaxKexts)
+      || NumMaxKexts == MAX_UINT32) {
+      return RETURN_INVALID_PARAMETER;
+    }
     
   //
   // Mkext v2.
   //
-  } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
-    if (!ParseMkextV2Plist (
-      &Context->MkextHeader->V2,
-      &Context->MkextInfo,
-      &Context->MkextInfoDocument,
-      &Context->MkextKexts
-      )) {
+  } else if (MkextVersion == MKEXT_VERSION_V2) {
+    if (!ParseMkextV2Plist (&MkextHeader->V2, &PlistBuffer, &PlistXml, &PlistBundles)) {
       return RETURN_INVALID_PARAMETER;
     }
-    Context->MkextInfoOffset = SwapBytes32 (Context->MkextHeader->V2.PlistOffset);
+    PlistOffset = SwapBytes32 (MkextHeader->V2.PlistOffset);
 
     //
     // Enumerate bundle dicts.
     //
-    BundleArrayCount = XmlNodeChildren (Context->MkextKexts);
-    for (BundleArrayIndex = 0; BundleArrayIndex < BundleArrayCount; BundleArrayIndex++) {
-      BundleDictRoot = PlistNodeCast (XmlNodeChild (Context->MkextKexts, BundleArrayIndex), PLIST_NODE_TYPE_DICT);
-      if (BundleDictRoot == NULL) {
-
+    PlistBundlesCount = XmlNodeChildren (PlistBundles);
+    for (Index = 0; Index < PlistBundlesCount; Index++) {
+      PlistBundle = PlistNodeCast (XmlNodeChild (PlistBundles, Index), PLIST_NODE_TYPE_DICT);
+      if (PlistBundle == NULL) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
         return RETURN_INVALID_PARAMETER;
       }
 
-      BundleDictRootCount = PlistDictChildren (BundleDictRoot);
-      for (BundleDictRootIndex = 0; BundleDictRootIndex < BundleDictRootCount; BundleDictRootIndex++) {
-        BundleDictRootKey = PlistKeyValue (PlistDictChild (BundleDictRoot, BundleDictRootIndex, &BundleExecutable));
-        if (AsciiStrCmp (BundleDictRootKey, MKEXT_EXECUTABLE_KEY) == 0) {
-          BundleExecutable = PlistNodeCast (BundleExecutable, PLIST_NODE_TYPE_INTEGER);
-          if (BundleExecutable == NULL) {
-            return RETURN_INVALID_PARAMETER;
-          }
-
+      PlistBundleCount = PlistDictChildren (PlistBundle);
+      for (PlistBundleIndex = 0; PlistBundleIndex < PlistBundleCount; PlistBundleIndex++) {
+        PlistBundleKey = PlistKeyValue (PlistDictChild (PlistBundle, PlistBundleIndex, &BundleExecutable));
+        if (AsciiStrCmp (PlistBundleKey, MKEXT_EXECUTABLE_KEY) == 0) {
           //
           // Ensure binary offset is before plist offset.
+          // Try in hex first, and then decimal.
           //
-          if (!PlistIntegerValue (BundleExecutable, &BundleExecutableOffset, sizeof (BundleExecutableOffset), FALSE)) {
+          if (!PlistIntegerValue (BundleExecutable, &BinOffset, sizeof (BinOffset), TRUE)
+            || BinOffset >= PlistOffset) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
             return RETURN_INVALID_PARAMETER;
           }
-          if (BundleExecutableOffset >= Context->MkextInfoOffset) {
-            return RETURN_INVALID_PARAMETER;
+          if (BinOffset == 0) {
+            if (!PlistIntegerValue (BundleExecutable, &BinOffset, sizeof (BinOffset), FALSE)
+              || BinOffset == 0
+              || BinOffset >= PlistOffset) {
+              XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+              return RETURN_INVALID_PARAMETER;
+            }
           }
         }
       }
     }
- 
-    return RETURN_SUCCESS;
-  } 
 
-  return RETURN_UNSUPPORTED;
+  //
+  // Unsupported version.
+  //
+  } else {
+    return RETURN_UNSUPPORTED;
+  }
+
+  ZeroMem (Context, sizeof (MKEXT_CONTEXT));
+  Context->Mkext                = Mkext;
+  Context->MkextSize            = MkextSize;
+  Context->MkextHeader          = MkextHeader;
+  Context->MkextAllocSize       = MkextAllocSize;
+  Context->MkextVersion         = MkextVersion;
+  Context->Is64Bit              = Is64Bit;
+  Context->NumKexts             = NumKexts;
+
+  if (MkextVersion == MKEXT_VERSION_V1) {
+    Context->NumMaxKexts        = NumMaxKexts;
+  } else if (MkextVersion == MKEXT_VERSION_V2) {
+    Context->MkextInfoOffset    = PlistOffset;
+    Context->MkextInfo          = PlistBuffer;
+    Context->MkextInfoDocument  = PlistXml;
+    Context->MkextKexts         = PlistBundles;
+  }
+
+  return RETURN_SUCCESS;
 }
 
 RETURN_STATUS
@@ -814,19 +903,23 @@ MkextInjectKext (
   IN     UINT32             ExecutableSize OPTIONAL
   )
 {
-  XML_DOCUMENT      *InfoPlistDocument;
-  XML_NODE          *InfoPlistRoot;
-  CHAR8             *TmpInfoPlist;
-  CHAR8             *NewInfoPlist;
-  CONST CHAR8       *TmpKeyValue;
-  UINT32            FieldCount;
-  UINT32            FieldIndex;
-  UINT32            NewInfoPlistSize;
+  UINT32                MkextNewSize;
+  UINT32                PlistOffset;
+  UINT32                BinOffset;
 
-  BOOLEAN               Failed;
-  UINT32                Offset;
+  CHAR8                 *PlistBuffer;
+  CHAR8                 *PlistExported;
+  UINT32                PlistExportedSize;
+  XML_DOCUMENT          *PlistXml;
+  XML_NODE              *PlistRoot;
+  BOOLEAN               PlistFailed;
+  
+  CONST CHAR8           *TmpKeyValue;
+  UINT32                FieldCount;
+  UINT32                FieldIndex;
+
   CHAR8                 ExecutableSourceAddrStr[24];
-  MKEXT_V2_FILE_ENTRY   *MkextEntry;
+  MKEXT_V2_FILE_ENTRY   *MkextExecutableEntry;
 
   ASSERT (Context != NULL);
   ASSERT (BundlePath != NULL);
@@ -837,107 +930,76 @@ MkextInjectKext (
   // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
-    DEBUG ((DEBUG_INFO, "Adding kext %u\n", Context->NumKexts));
     if (Context->NumKexts >= Context->NumMaxKexts) {
-      return EFI_OUT_OF_RESOURCES;
+      return RETURN_OUT_OF_RESOURCES;
     }
 
     //
-    // Place plist at current end of mkext.
+    // Plist will be placed at end of mkext.
     //
-    Offset = Context->MkextSize;
-    CopyMem (&Context->Mkext[Offset], InfoPlist, InfoPlistSize);
-    if (OcOverflowAddU32 (Context->MkextSize, InfoPlistSize, &Context->MkextSize)) {
+    PlistOffset = Context->MkextSize;
+    if (OcOverflowAddU32 (PlistOffset, MKEXT_ALIGN (InfoPlistSize), &MkextNewSize)) {
       return RETURN_INVALID_PARAMETER;
+    } else if (MkextNewSize > Context->MkextAllocSize) {
+      return RETURN_BUFFER_TOO_SMALL;
     }
 
-    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.Offset = SwapBytes32 (Offset);
-    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.CompressedSize = 0;
-    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.FullSize = SwapBytes32 (InfoPlistSize);
-    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.ModifiedSeconds = 0; // TODO: what value?
-
     //
-    // Copy executable to mkext.
+    // Executable, if present, will be placed right after plist.
     //
     if (Executable != NULL) {
       ASSERT (ExecutableSize > 0);
-  
-      //
-      // Parse kext binary.
-      //
-      if (!ParseKextBinary (&Executable, &ExecutableSize, Context->CpuType)) {
+
+      BinOffset = MkextNewSize;
+      if (!ParseKextBinary (&Executable, &ExecutableSize, Context->Is64Bit)
+        || OcOverflowAddU32 (BinOffset, MKEXT_ALIGN (ExecutableSize), &MkextNewSize)) {
         return RETURN_INVALID_PARAMETER;
       }
-
-      //
-      // Place binary after associated plist.
-      //
-      Offset = Context->MkextSize;
-      CopyMem (&Context->Mkext[Offset], Executable, ExecutableSize);
-      if (OcOverflowAddU32 (Context->MkextSize, ExecutableSize, &Context->MkextSize)) {
-        return RETURN_INVALID_PARAMETER;
+      
+      if (MkextNewSize > Context->MkextAllocSize) {
+        return RETURN_BUFFER_TOO_SMALL;
       }
 
-      Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.Offset = SwapBytes32 (Offset);
+      CopyMem (&Context->Mkext[BinOffset], Executable, ExecutableSize);
+      Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.Offset = SwapBytes32 (BinOffset);
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.CompressedSize = 0;
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.FullSize = SwapBytes32 (ExecutableSize);
       Context->MkextHeader->V1.Kexts[Context->NumKexts].Binary.ModifiedSeconds = 0;
     }
 
-    Context->NumKexts++; // TODO: account for overflow; is that even possible?
-    return RETURN_SUCCESS;
+    CopyMem (&Context->Mkext[PlistOffset], InfoPlist, InfoPlistSize);
+    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.Offset = SwapBytes32 (PlistOffset);
+    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.CompressedSize = 0;
+    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.FullSize = SwapBytes32 (InfoPlistSize);
+    Context->MkextHeader->V1.Kexts[Context->NumKexts].Plist.ModifiedSeconds = 0;
 
+    //
+    // Assumption:
+    //    NumKexts is checked to be under MaxNumKexts, which is assumed to be under
+    //    the max value of UINT32 during context creation. This operation thus cannot overflow.
+    //
+    Context->MkextSize = MkextNewSize;
+    Context->NumKexts++;
 
   //
   // Mkext v2.
   //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
-    //
-    // Copy executable to mkext.
-    //
-    if (Executable != NULL) {
-      ASSERT (ExecutableSize > 0);
-
-      //
-      // Parse kext binary.
-      //
-      if (!ParseKextBinary (&Executable, &ExecutableSize, Context->CpuType)) {
-        return RETURN_INVALID_PARAMETER;
-      }
-
-      //
-      // Get current offset of plist. TODO: alignment requirements?
-      //
-      Offset = Context->MkextInfoOffset;
-      Context->MkextInfoOffset += ExecutableSize + sizeof (MKEXT_V2_FILE_ENTRY);
-
-      //
-      // Copy binary to mkext.
-      //
-      MkextEntry = (MKEXT_V2_FILE_ENTRY*)&Context->Mkext[Offset];
-      MkextEntry->CompressedSize = 0;
-      MkextEntry->FullSize = SwapBytes32 (ExecutableSize);
-      CopyMem (MkextEntry->Data, Executable, ExecutableSize);
-    }
-
-    //
-    // Allocate Info.plist copy for XML_DOCUMENT.
-    //
-    TmpInfoPlist = AllocateCopyPool (InfoPlistSize, InfoPlist);
-    if (TmpInfoPlist == NULL) {
+    PlistBuffer = AllocateCopyPool (InfoPlistSize, InfoPlist);
+    if (PlistBuffer == NULL) {
       return RETURN_OUT_OF_RESOURCES;
     }
 
-    InfoPlistDocument = XmlDocumentParse (TmpInfoPlist, InfoPlistSize, FALSE);
-    if (InfoPlistDocument == NULL) {
-      FreePool (TmpInfoPlist);
+    PlistXml = XmlDocumentParse (PlistBuffer, InfoPlistSize, FALSE);
+    if (PlistXml == NULL) {
+      FreePool (PlistBuffer);
       return RETURN_INVALID_PARAMETER;
     }
 
-    InfoPlistRoot = PlistNodeCast (PlistDocumentRoot (InfoPlistDocument), PLIST_NODE_TYPE_DICT);
-    if (InfoPlistRoot == NULL) {
-      XmlDocumentFree (InfoPlistDocument);
-      FreePool (TmpInfoPlist);
+    PlistRoot = PlistNodeCast (PlistDocumentRoot (PlistXml), PLIST_NODE_TYPE_DICT);
+    if (PlistRoot == NULL) {
+      XmlDocumentFree (PlistXml);
+      FreePool (PlistBuffer);
       return RETURN_INVALID_PARAMETER;
     }
 
@@ -948,9 +1010,9 @@ MkextInjectKext (
     //
     DEBUG_CODE_BEGIN ();
     if (Executable == NULL) {
-      FieldCount = PlistDictChildren (InfoPlistRoot);
+      FieldCount = PlistDictChildren (PlistRoot);
       for (FieldIndex = 0; FieldIndex < FieldCount; ++FieldIndex) {
-        TmpKeyValue = PlistKeyValue (PlistDictChild (InfoPlistRoot, FieldIndex, NULL));
+        TmpKeyValue = PlistKeyValue (PlistDictChild (PlistRoot, FieldIndex, NULL));
         if (TmpKeyValue == NULL) {
           continue;
         }
@@ -965,41 +1027,69 @@ MkextInjectKext (
     DEBUG_CODE_END ();
 
     //
-    // Add executable offset.
+    // Executable, if present, will be placed at end of mkext and plist will be moved further out.
     //
-    Failed = FALSE;
+    PlistFailed = FALSE;
     if (Executable != NULL) {
-      Failed |= !AsciiUint64ToLowerHex (ExecutableSourceAddrStr, sizeof (ExecutableSourceAddrStr), Offset);
-      Failed |= XmlNodeAppend (InfoPlistRoot, "key", NULL, MKEXT_EXECUTABLE_KEY) == NULL;
-      Failed |= XmlNodeAppend (InfoPlistRoot, "integer", MKEXT_INFO_INTEGER_ATTRIBUTES, ExecutableSourceAddrStr) == NULL;  
+      ASSERT (ExecutableSize > 0);
+      
+      BinOffset = Context->MkextInfoOffset;
+      if (!ParseKextBinary (&Executable, &ExecutableSize, Context->Is64Bit)
+        || OcOverflowTriAddU32 (BinOffset, sizeof (MKEXT_V2_FILE_ENTRY), MKEXT_ALIGN (ExecutableSize), &PlistOffset)) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
+        return RETURN_INVALID_PARAMETER;
+      } 
+      
+      if (PlistOffset >= Context->MkextAllocSize) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
+        return RETURN_BUFFER_TOO_SMALL;
+      }
+
+      PlistFailed |= !AsciiUint64ToLowerHex (ExecutableSourceAddrStr, sizeof (ExecutableSourceAddrStr), BinOffset);
+      PlistFailed |= XmlNodeAppend (PlistRoot, "key", NULL, MKEXT_EXECUTABLE_KEY) == NULL;
+      PlistFailed |= XmlNodeAppend (PlistRoot, "integer", MKEXT_INFO_INTEGER_ATTRIBUTES, ExecutableSourceAddrStr) == NULL;
     }
 
     //
     // Add bundle path.
     //
-    Failed |= XmlNodeAppend (InfoPlistRoot, "key", NULL, MKEXT_BUNDLE_PATH_KEY) == NULL;
-    Failed |= XmlNodeAppend (InfoPlistRoot, "string", NULL, BundlePath) == NULL;
-    if (Failed) {
-      XmlDocumentFree (InfoPlistDocument);
-      FreePool (TmpInfoPlist);
+    PlistFailed |= XmlNodeAppend (PlistRoot, "key", NULL, MKEXT_BUNDLE_PATH_KEY) == NULL;
+    PlistFailed |= XmlNodeAppend (PlistRoot, "string", NULL, BundlePath) == NULL;
+    if (PlistFailed) {
+      XmlDocumentFree (PlistXml);
+      FreePool (PlistBuffer);
       return RETURN_OUT_OF_RESOURCES;
     }
 
     //
-    // Strip outer plist & dict.
+    // Strip down Info.plist for appending to primary plist.
     //
-    NewInfoPlist = XmlDocumentExport (InfoPlistDocument, &NewInfoPlistSize, 2);
-    XmlDocumentFree (InfoPlistDocument);
-    FreePool (TmpInfoPlist);
+    PlistExported = XmlDocumentExport (PlistXml, &PlistExportedSize, 2);
+    XmlDocumentFree (PlistXml);
+    FreePool (PlistBuffer);
 
-    if (XmlNodeAppend (Context->MkextKexts, "dict", NULL, NewInfoPlist) == NULL) {
-      DEBUG ((DEBUG_INFO, "ERROR INJECTING\n"));
+    if (XmlNodeAppend (Context->MkextKexts, "dict", NULL, PlistExported) == NULL) {
       return RETURN_OUT_OF_RESOURCES;
     }
-    return RETURN_SUCCESS;
-  } 
+    Context->MkextInfoOffset = PlistOffset;
 
-  return RETURN_UNSUPPORTED;
+    if (Executable != NULL) {
+      MkextExecutableEntry = (MKEXT_V2_FILE_ENTRY *) &Context->Mkext[BinOffset];
+      MkextExecutableEntry->CompressedSize = 0;
+      MkextExecutableEntry->FullSize = SwapBytes32 (ExecutableSize);
+      CopyMem (MkextExecutableEntry->Data, Executable, ExecutableSize);
+    }
+  
+  //
+  // Unsupported version.
+  //
+  } else {
+    return RETURN_UNSUPPORTED;
+  }
+
+  return RETURN_SUCCESS;
 }
 
 RETURN_STATUS
@@ -1008,103 +1098,283 @@ MkextBlockKext (
   IN     CONST CHAR8        *Identifier
   )
 {
-  RETURN_STATUS Status;
+  RETURN_STATUS         Status;
+  UINT32                Tmp;
+  UINT32                Index;
+  PATCHER_CONTEXT       Patcher;
 
-  UINT32        Index;
-  UINT32        PlistOffset;
-  UINT32        PlistLength;
-  UINT32        BinaryOffset;
-  UINT32        BinaryLength;
+  UINT32                PlistOffset;
+  UINT32                PlistSize;
+  UINT32                BinOffset;
+  UINT32                BinSize;
 
-  UINT8         *PlistBuffer;
-  UINT32        PlistBufferSize;
-  XML_DOCUMENT  *PlistDoc;
-  XML_NODE      *PlistRoot;
+  UINT8                 *PlistBuffer;
+  UINT32                PlistBufferSize;
+  XML_DOCUMENT          *PlistXml;
+  XML_NODE              *PlistRoot;
 
-  PATCHER_CONTEXT Patcher;
+  UINT32                PlistBundlesCount;
+  XML_NODE              *PlistBundle;
+  UINT32                PlistBundleIndex;
+  UINT32                PlistBundleCount;
+  CONST CHAR8           *PlistBundleKey;
+  XML_NODE              *BundleValue;
+
+  CHAR8                 *BundleStr;
+  UINT32                BundleStrSize;
+  BOOLEAN               BundleFound;
+  MKEXT_V2_FILE_ENTRY   *MkextExecutableEntry;
 
   ASSERT (Context != NULL);
   ASSERT (Identifier != NULL);
 
   //
+  // Create temporary string buffer for comparions.
+  //
+  BundleStrSize   = SIZE_1KB;
+  BundleStr       = AllocatePool (BundleStrSize);
+  if (BundleStr == NULL) {
+    return RETURN_OUT_OF_RESOURCES;
+  }
+
+  //
   // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
-
+    //
+    // Create temporary buffer for loading and parsing plists,
+    //    as OcXmlLib is desctructive to the source buffer.
     PlistBufferSize = SIZE_1MB;
     PlistBuffer = AllocatePool (PlistBufferSize);
     if (PlistBuffer == NULL) {
+      FreePool (BundleStr);
       return RETURN_OUT_OF_RESOURCES;
     }
 
+    BundleFound = FALSE;
     for (Index = 0; Index < Context->NumKexts; Index++) {
-      PlistOffset   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.Offset);
-      PlistLength   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.FullSize);
-      BinaryOffset  = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.Offset);
-      BinaryLength  = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.FullSize);
+      PlistOffset = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.Offset);
+      PlistSize   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Plist.FullSize);
+      BinOffset   = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.Offset);
+      BinSize     = SwapBytes32 (Context->MkextHeader->V1.Kexts[Index].Binary.FullSize);
 
-      if (PlistBufferSize < PlistLength) {
+      //
+      // Only handle kexts with binaries.
+      //
+      if (BinSize == 0) {
+        continue;
+      }
+
+      //
+      // Resize buffer as needed.
+      //
+      if (PlistBufferSize < PlistSize) {
         FreePool (PlistBuffer);
-        PlistBufferSize = PlistLength;
+        PlistBufferSize = PlistSize;
         PlistBuffer = AllocatePool (PlistBufferSize);
         if (PlistBuffer == NULL) {
+          FreePool (BundleStr);
           return RETURN_OUT_OF_RESOURCES;
         }
       }
 
-      CopyMem (PlistBuffer, &Context->Mkext[PlistOffset], PlistLength);
-      
-      PlistDoc = XmlDocumentParse ((CHAR8*)PlistBuffer, PlistLength, FALSE);
-      ASSERT (PlistDoc != NULL);
+      if (OcOverflowAddU32 (PlistOffset, PlistSize, &Tmp)
+        || Tmp > Context->MkextSize) {
+          FreePool (PlistBuffer);
+          FreePool (BundleStr);
+        return RETURN_INVALID_PARAMETER;
+      }
 
-      PlistRoot = PlistNodeCast (PlistDocumentRoot (PlistDoc), PLIST_NODE_TYPE_DICT);
-      ASSERT (PlistRoot != NULL);
+      CopyMem (PlistBuffer, &Context->Mkext[PlistOffset], PlistSize);
+      PlistXml = XmlDocumentParse ((CHAR8 *) PlistBuffer, PlistSize, FALSE);
+      if (PlistXml == NULL) {
+        FreePool (PlistBuffer);
+        FreePool (BundleStr);
+        return RETURN_INVALID_PARAMETER;
+      }
 
-      
-      XML_NODE *BundleArray;
-      UINT32 MkextInfoRootCount = PlistDictChildren (PlistRoot);
-      for (UINT32 MkextInfoRootIndex = 0; MkextInfoRootIndex < MkextInfoRootCount; MkextInfoRootIndex++) {
-        CONST CHAR8 *BundleArrayKey = PlistKeyValue (PlistDictChild (PlistRoot, MkextInfoRootIndex, &BundleArray));
-        if (AsciiStrCmp (BundleArrayKey, INFO_BUNDLE_IDENTIFIER_KEY) == 0) {
-          UINT32 strSize;
+      PlistRoot = PlistNodeCast (PlistDocumentRoot (PlistXml), PLIST_NODE_TYPE_DICT);
+      if (PlistRoot == NULL) {
+        XmlDocumentFree (PlistXml);
+        FreePool (PlistBuffer);
+        FreePool (BundleStr);
+        return RETURN_INVALID_PARAMETER;
+      }
 
-          PlistStringSize (BundleArray, &strSize);
-          CHAR8 *str = AllocateZeroPool (strSize);
-
-          PlistStringValue (BundleArray, str, &strSize);
-
-          
-          if (AsciiStrCmp (str, Identifier) == 0) {
-            DEBUG ((DEBUG_INFO, "Got bundle ID %a at 0x%X 0x%X\n", str, BinaryOffset, *((UINT32*)&Context->Mkext[BinaryOffset])));
-
-            Status = PatcherInitContextFromBuffer32 (&Patcher, &Context->Mkext[BinaryOffset], BinaryLength);
-            ASSERT (!RETURN_ERROR (Status));
-
-            Status = PatcherBlockKext (&Patcher);
-            ASSERT (!RETURN_ERROR (Status));
+      //
+      // Locate and match against bundle ID in plist.
+      //
+      PlistBundleCount = PlistDictChildren (PlistRoot);
+      for (PlistBundleIndex = 0; PlistBundleIndex < PlistBundleCount; PlistBundleIndex++) {
+        PlistBundleKey = PlistKeyValue (PlistDictChild (PlistRoot, PlistBundleIndex, &BundleValue));
+        if (AsciiStrCmp (PlistBundleKey, INFO_BUNDLE_IDENTIFIER_KEY) == 0) {
+          if (!PlistStringSize (BundleValue, &Tmp)) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+            FreePool (BundleStr);
+            return RETURN_INVALID_PARAMETER;
           }
+
+          //
+          // Resize string buffer as needed.
+          //
+          if (BundleStrSize < Tmp) {
+            FreePool (BundleStr);
+            BundleStrSize = Tmp;
+            BundleStr = AllocatePool (BundleStrSize);
+            if (BundleStr == NULL) {
+              XmlDocumentFree (PlistXml);
+              FreePool (PlistBuffer);
+              return RETURN_OUT_OF_RESOURCES;
+            }
+          }
+
+          if (!PlistStringValue (BundleValue, BundleStr, &Tmp)) {
+            XmlDocumentFree (PlistXml);
+            FreePool (PlistBuffer);
+            FreePool (BundleStr);
+            return RETURN_INVALID_PARAMETER;
+          }
+          
+          //
+          // Search is complete once bundle ID matches.
+          // If no match, continue to next kext.
+          //
+          if (AsciiStrCmp (BundleStr, Identifier) == 0) {
+            BundleFound = TRUE;
+          }
+          break;
         }
+      }
+
+      XmlDocumentFree (PlistXml);
+      if (BundleFound) {
+        break;
       }
     }
 
-      
-
-      
-
-
-
     FreePool (PlistBuffer);
-    return RETURN_SUCCESS;
+    if (!BundleFound) {
+      FreePool (BundleStr);
+      return RETURN_NOT_FOUND;
+    }
 
   //
   // Mkext v2.
   //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
+    //
+    // Enumerate bundle dicts.
+    //
+    PlistBundlesCount = XmlNodeChildren (Context->MkextKexts);
+    for (Index = 0; Index < PlistBundlesCount; Index++) {
+      PlistBundle = PlistNodeCast (XmlNodeChild (Context->MkextKexts, Index), PLIST_NODE_TYPE_DICT);
+      if (PlistBundle == NULL) {
+        FreePool (BundleStr);
+        return RETURN_INVALID_PARAMETER;
+      }
 
-    return RETURN_SUCCESS;
+      PlistBundleCount  = PlistDictChildren (PlistBundle);
+      BinOffset         = 0;
+      BundleFound       = FALSE;
+      
+      //
+      // Locate bundle ID and executable offset.
+      //
+      for (PlistBundleIndex = 0; PlistBundleIndex < PlistBundleCount; PlistBundleIndex++) {
+        PlistBundleKey = PlistKeyValue (PlistDictChild (PlistBundle, PlistBundleIndex, &BundleValue));
+        if (AsciiStrCmp (PlistBundleKey, MKEXT_EXECUTABLE_KEY) == 0) {
+          //
+          // Try in hex first, and then decimal.
+          //
+          if (!PlistIntegerValue (BundleValue, &BinOffset, sizeof (BinOffset), TRUE)) {
+            FreePool (BundleStr);
+            return RETURN_INVALID_PARAMETER;
+          }
+          if (BinOffset == 0) {
+            if (!PlistIntegerValue (BundleValue, &BinOffset, sizeof (BinOffset), FALSE)
+              || BinOffset == 0) {
+              FreePool (BundleStr);
+              return RETURN_INVALID_PARAMETER;
+            }
+          }
+
+        } else if (AsciiStrCmp (PlistBundleKey, INFO_BUNDLE_IDENTIFIER_KEY) == 0) {
+          if (!PlistStringSize (BundleValue, &Tmp)) {
+            FreePool (BundleStr);
+            return RETURN_INVALID_PARAMETER;
+          }
+
+          //
+          // Resize string buffer as needed.
+          //
+          if (BundleStrSize < Tmp) {
+            FreePool (BundleStr);
+            BundleStrSize = Tmp;
+            BundleStr = AllocatePool (BundleStrSize);
+            if (BundleStr == NULL) {
+              return RETURN_OUT_OF_RESOURCES;
+            }
+          }
+
+          if (!PlistStringValue (BundleValue, BundleStr, &Tmp)) {
+            FreePool (BundleStr);
+            return RETURN_INVALID_PARAMETER;
+          }
+          BundleFound = AsciiStrCmp (BundleStr, Identifier) == 0;
+        }
+
+        //
+        // If a matching bundle with a binary was found, search is complete.
+        //
+        if (BundleFound && BinOffset > 0) {
+          break;
+        }
+      }
+
+      if (BundleFound && BinOffset > 0) {
+        break;
+      }
+    }
+
+    if (!(BundleFound && BinOffset > 0)) {
+      FreePool (BundleStr);
+      return RETURN_NOT_FOUND;
+    }
+
+    MkextExecutableEntry  = (MKEXT_V2_FILE_ENTRY *) &Context->Mkext[BinOffset];
+    BinSize               = SwapBytes32 (MkextExecutableEntry->FullSize);
+    if (MkextExecutableEntry->CompressedSize != 0) {
+      FreePool (BundleStr);
+      return RETURN_UNSUPPORTED;
+    }
+    if (OcOverflowAddU32 (BinOffset, sizeof (MKEXT_V2_FILE_ENTRY), &BinOffset)) {
+      FreePool (BundleStr);
+      return RETURN_INVALID_PARAMETER;
+    }
+
+  //
+  // Unsupported version.
+  //
+  } else {
+    FreePool (BundleStr);
+    return RETURN_UNSUPPORTED;
   }
 
-  return RETURN_UNSUPPORTED;
+  DEBUG ((DEBUG_INFO, "Got bundle ID %a at 0x%X 0x%X\n", BundleStr, BinOffset, *((UINT32*)&Context->Mkext[BinOffset])));
+  FreePool (BundleStr);
+
+  Status = PatcherInitContextFromBuffer (&Patcher, &Context->Mkext[BinOffset], BinSize, Context->Is64Bit);
+  if (RETURN_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = PatcherBlockKext (&Patcher);
+  if (RETURN_ERROR (Status)) {
+    return Status;
+  }
+
+  return RETURN_SUCCESS;  
 }
 
 RETURN_STATUS
@@ -1114,24 +1384,28 @@ MkextInjectPatchComplete (
 {
   UINT32 MkextPlistSize;
 
+  ASSERT (Context != NULL);
+
   //
   // Mkext v1.
   //
   if (Context->MkextVersion == MKEXT_VERSION_V1) {
     Context->MkextHeader->Common.NumKexts = SwapBytes32 (Context->NumKexts);
-    UpdateMkextLengthChecksum (Context->MkextHeader, Context->MkextSize);
-    return RETURN_SUCCESS;
 
   //
   // Mkext v2.
   //
   } else if (Context->MkextVersion == MKEXT_VERSION_V2) {
     MkextPlistSize = UpdateMkextV2Plist (&Context->MkextHeader->V2, Context->MkextInfoDocument, Context->MkextInfoOffset);
-
     Context->MkextSize = Context->MkextInfoOffset + MkextPlistSize;
-    UpdateMkextLengthChecksum (Context->MkextHeader, Context->MkextSize);
-    return RETURN_SUCCESS;
+
+  //
+  // Unsupported version.
+  //
+  } else {
+    return RETURN_UNSUPPORTED;
   }
 
-  return RETURN_UNSUPPORTED;
+  UpdateMkextLengthChecksum (Context->MkextHeader, Context->MkextSize);
+  return RETURN_SUCCESS;
 }

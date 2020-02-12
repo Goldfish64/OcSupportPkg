@@ -28,41 +28,61 @@
 
 STATIC
 BOOLEAN
-InternalPatcherFindKmodAddress32 (
+InternalPatcherFindKmodAddress (
   IN  OC_MACHO_CONTEXT  *ExecutableContext,
   IN  UINT32            Size,
-  IN  UINT32            TextOffset,
-  OUT UINT32            *Kmod
+  IN  UINT64            TextOffset,
+  OUT UINT64            *Kmod,
+  IN  BOOLEAN           Is64Bit
   )
 {
-  MACH_NLIST               *Symbol;
+  MACH_NLIST               *Symbol32;
+  MACH_NLIST_64            *Symbol64;
   CONST CHAR8              *SymbolName;
-  UINT32                   Address;
+  UINT64                   Address;
   UINT32                   Index;
 
   Index = 0;
   while (TRUE) {
-    Symbol = MachoGetSymbolByIndex32 (ExecutableContext, Index);
-    if (Symbol == NULL) {
-      *Kmod = 0;
-      return TRUE;
-    }
+    if (Is64Bit) {
+      Symbol64 = MachoGetSymbolByIndex64 (ExecutableContext, Index);
+      if (Symbol64 == NULL) {
+        *Kmod = 0;
+        return TRUE;
+      }
 
-    if ((Symbol->Type & MACH_N_TYPE_STAB) == 0) {
-      SymbolName = MachoGetSymbolName32 (ExecutableContext, Symbol);
-      if (SymbolName && AsciiStrCmp (SymbolName, "_kmod_info") == 0) {
-        if (!MachoIsSymbolValueInRange32 (ExecutableContext, Symbol)) {
-          return FALSE;
+      if ((Symbol64->Type & MACH_N_TYPE_STAB) == 0) {
+        SymbolName = MachoGetSymbolName64 (ExecutableContext, Symbol64);
+        if (SymbolName && AsciiStrCmp (SymbolName, "_kmod_info") == 0) {
+          if (!MachoIsSymbolValueInRange64 (ExecutableContext, Symbol64)) {
+            return FALSE;
+          }
+          break;
         }
-        break;
+      }
+    } else {
+      Symbol32 = MachoGetSymbolByIndex32 (ExecutableContext, Index);
+      if (Symbol32 == NULL) {
+        *Kmod = 0;
+        return TRUE;
+      }
+
+      if ((Symbol32->Type & MACH_N_TYPE_STAB) == 0) {
+        SymbolName = MachoGetSymbolName32 (ExecutableContext, Symbol32);
+        if (SymbolName && AsciiStrCmp (SymbolName, "_kmod_info") == 0) {
+          if (!MachoIsSymbolValueInRange32 (ExecutableContext, Symbol32)) {
+            return FALSE;
+          }
+          break;
+        }
       }
     }
 
     Index++;
   }
 
-  if (OcOverflowAddU32 (TextOffset, Symbol->Value, &Address)
-    || Address > Size - sizeof (KMOD_INFO_32_V1)) {
+  if (OcOverflowAddU64 (TextOffset, Is64Bit ? Symbol64->Value : Symbol32->Value, &Address)
+    || Address > Size - (Is64Bit ? sizeof (KMOD_INFO_64_V1) : sizeof (KMOD_INFO_32_V1))) {
     return FALSE;
   }
 
@@ -89,13 +109,18 @@ PatcherInitContextFromPrelinked (
 }
 
 RETURN_STATUS
-PatcherInitContextFromBuffer32 (
+PatcherInitContextFromBuffer (
   IN OUT PATCHER_CONTEXT    *Context,
   IN OUT UINT8              *Buffer,
-  IN     UINT32             BufferSize
+  IN     UINT32             BufferSize,
+  IN     BOOLEAN            Is64Bit
   )
 {
-  MACH_SECTION *Section;
+  MACH_SECTION      *Section32;
+  MACH_SECTION_64   *Section64;
+
+  UINT64            Address;
+  UINT64            Offset;
 
   ASSERT (Context != NULL);
   ASSERT (Buffer != NULL);
@@ -108,68 +133,46 @@ PatcherInitContextFromBuffer32 (
   // and request PRELINK_KERNEL_IDENTIFIER.
   //
 
-  if (!MachoInitializeContext32 (&Context->MachContext, Buffer, BufferSize)) {
+  if (!MachoInitializeContext (&Context->MachContext, Buffer, BufferSize, Is64Bit)) {
     return RETURN_INVALID_PARAMETER;
   }
-
-  Section = MachoGetSegmentSectionByName32 (&Context->MachContext, "__TEXT", "__text");
-  if (Section == NULL) {
-    Section = MachoGetSegmentSectionByName32 (&Context->MachContext, "", "__text");
-    if (Section == NULL) {
-      return RETURN_NOT_FOUND;
+  
+  if (Is64Bit) {
+    Section64 = MachoGetSegmentSectionByName64 (&Context->MachContext, "__TEXT", "__text");
+    if (Section64 == NULL) {
+      Section64 = MachoGetSegmentSectionByName64 (&Context->MachContext, "", "__text");
+      if (Section64 == NULL) {
+        return RETURN_NOT_FOUND;
+      }
     }
+
+    Address = Section64->Address;
+    Offset  = Section64->Offset;
+  } else {
+    Section32 = MachoGetSegmentSectionByName32 (&Context->MachContext, "__TEXT", "__text");
+    if (Section32 == NULL) {
+      Section32 = MachoGetSegmentSectionByName32 (&Context->MachContext, "", "__text");
+      if (Section32 == NULL) {
+        return RETURN_NOT_FOUND;
+      }
+    }
+
+    Address = Section32->Address;
+    Offset  = Section32->Offset;
   }
 
-  if (Section->Address < Section->Offset) {
-    Context->FileOffset = Section->Offset - Section->Address;
+  if (Address < Offset) {
+    Context->FileOffset = Offset - Address;
   } else {
-    Context->FileOffset = Section->Address - Section->Offset;
+    Context->FileOffset = Address - Offset;
   }
 
   Context->VirtualBase = 0;
-  Context->Is64Bit = FALSE;
-
-  InternalPatcherFindKmodAddress32 (&Context->MachContext, BufferSize, Context->FileOffset, (UINT32*)&Context->VirtualKmod);
-  DEBUG ((DEBUG_INFO, "__text @ 0x%X, kmod @ 0x%X\n", Context->FileOffset, Context->VirtualKmod ));
-
-  return RETURN_SUCCESS;
-}
-
-RETURN_STATUS
-PatcherInitContextFromBuffer64 (
-  IN OUT PATCHER_CONTEXT    *Context,
-  IN OUT UINT8              *Buffer,
-  IN     UINT32             BufferSize
-  )
-{
-  MACH_SEGMENT_COMMAND_64  *Segment;
-
-  ASSERT (Context != NULL);
-  ASSERT (Buffer != NULL);
-  ASSERT (BufferSize > 0);
-
-  //
-  // This interface is still used for the kernel due to the need to patch
-  // standalone kernel outside of prelinkedkernel in e.g. 10.9.
-  // Once 10.9 support is dropped one could call PatcherInitContextFromPrelinked
-  // and request PRELINK_KERNEL_IDENTIFIER.
-  //
-
-  if (!MachoInitializeContext64 (&Context->MachContext, Buffer, BufferSize)) {
-    return RETURN_INVALID_PARAMETER;
+  Context->Is64Bit = Is64Bit;
+  if (!InternalPatcherFindKmodAddress (&Context->MachContext, BufferSize, Context->FileOffset, &Context->VirtualKmod, Is64Bit)) {
+    Context->VirtualKmod = 0;
   }
-
-  Segment = MachoGetSegmentByName64 (
-    &Context->MachContext,
-    "__TEXT"
-    );
-  if (Segment == NULL || Segment->VirtualAddress < Segment->FileOffset) {
-    return RETURN_NOT_FOUND;
-  }
-
-  Context->VirtualBase = Segment->VirtualAddress - Segment->FileOffset;
-  Context->VirtualKmod = 0;
-  Context->Is64Bit = TRUE;
+  DEBUG ((DEBUG_INFO, "__text @ 0x%X, kmod @ 0x%X\n", Context->FileOffset, Context->VirtualKmod));
 
   return RETURN_SUCCESS;
 }
