@@ -1038,14 +1038,20 @@ InternalMachoInitializeContext (
 
   MachoFilterFatArchitectureByType ((UINT8 **) &FileData, &FileSize, Is64Bit ? MachCpuTypeX8664 : MachCpuTypeI386);
 
-
-  if (FileSize < sizeof (*MachHeader)
-    || !OC_TYPE_ALIGNED (MACH_HEADER_ANY, FileData)) {
-    return FALSE;
+  if (Is64Bit) {
+    if (FileSize < sizeof (MACH_HEADER_64)
+      || !OC_TYPE_ALIGNED (MACH_HEADER_64, FileData)) {
+      return FALSE;
+    }
+  } else {
+    if (FileSize < sizeof (MACH_HEADER)
+      || !OC_TYPE_ALIGNED (MACH_HEADER, FileData)) {
+      return FALSE;
+    }
   }
-  MachHeader = (MACH_HEADER_ANY*)FileData;
+  MachHeader = (MACH_HEADER_ANY *) FileData;
 
-  if (MachHeader->Signature == MACH_HEADER_SIGNATURE) {
+  if (!Is64Bit && MachHeader->Signature == MACH_HEADER_SIGNATURE) {
     //
     // 32-bit header.
     //
@@ -1053,7 +1059,7 @@ InternalMachoInitializeContext (
     MachCommands      = MachHeader->Header32.Commands;
     MachCommandsSize  = MachHeader->Header32.CommandsSize;
     MachNumCommands   = MachHeader->Header32.NumCommands;
-  } else if (MachHeader->Signature == MACH_HEADER_64_SIGNATURE) {
+  } else if (Is64Bit && MachHeader->Signature == MACH_HEADER_64_SIGNATURE) {
     //
     // 64-bit header.
     //
@@ -1063,7 +1069,7 @@ InternalMachoInitializeContext (
     MachNumCommands   = MachHeader->Header64.NumCommands;
   } else {
     //
-    // Invalid Mach-O image.
+    // Invalid Mach-O image or wrong type specified.
     //
     return FALSE;
   }
